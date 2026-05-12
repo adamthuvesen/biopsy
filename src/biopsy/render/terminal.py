@@ -7,9 +7,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from sketch.profile import Profile
-from sketch.sparkline import sparkline
-from sketch.stats import ColumnStats
+from biopsy.profile import Profile
+from biopsy.sparkline import sparkline
+from biopsy.stats import ColumnStats
 
 SEVERITY_STYLE = {
     "critical": "bold red",
@@ -49,7 +49,7 @@ def render(prof: Profile, console: Console | None = None) -> None:
 
 def _header(prof: Profile) -> Panel:
     head = Text()
-    head.append("sketch", style="bold magenta")
+    head.append("biopsy", style="bold magenta")
     head.append("  ")
     head.append(prof.source_name, style="dim")
     sub = Text.assemble(

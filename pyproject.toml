@@ -1,5 +1,5 @@
 [project]
-name = "sketch-eda"
+name = "biopsy"
 version = "0.1.0"
 description = "Instant, opinionated EDA in the terminal."
 readme = "README.md"
@@ -28,14 +28,14 @@ dev = [
 ]
 
 [project.scripts]
-sketch = "sketch.cli:app"
+biopsy = "biopsy.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sketch"]
+packages = ["src/biopsy"]
 
 [tool.ruff]
 line-length = 100
@@ -45,4 +45,4 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/sketch/cli.py" = ["B008"]
+"src/biopsy/cli.py" = ["B008"]

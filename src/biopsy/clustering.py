@@ -18,9 +18,9 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
-from sketch.correlations import TargetSignal, _valid_mask
-from sketch.io import Source
-from sketch.stats import ColumnStats, _quote
+from biopsy.correlations import TargetSignal, _valid_mask
+from biopsy.io import Source
+from biopsy.stats import ColumnStats, _quote
 
 DEFAULT_CUTOFF = 0.30          # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
 MIN_CLUSTER_MEMBERS_FOR_DEDUP = 2

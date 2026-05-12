@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sketch.clustering import ClusterReport, cluster_features
-from sketch.correlations import (
+from biopsy.clustering import ClusterReport, cluster_features
+from biopsy.correlations import (
     CorrelationPair,
     TargetSignal,
     correlation_pairs,
     target_signal,
 )
-from sketch.findings import (
+from biopsy.findings import (
     Finding,
     column_findings,
     correlation_findings,
@@ -24,10 +24,10 @@ from sketch.findings import (
     target_findings,
     temporal_findings,
 )
-from sketch.io import Source, load
-from sketch.serialize import to_jsonable
-from sketch.stats import ColumnStats, compute_all
-from sketch.temporal import TemporalReport, resolve_time_column, temporal_signals
+from biopsy.io import Source, load
+from biopsy.serialize import to_jsonable
+from biopsy.stats import ColumnStats, compute_all
+from biopsy.temporal import TemporalReport, resolve_time_column, temporal_signals
 
 
 @dataclass
@@ -234,6 +234,6 @@ def _pandas() -> Any:
     except ImportError as exc:
         raise ImportError(
             "Profile frame helpers require pandas. Install with "
-            "`pip install 'sketch-eda[dataframe]'`."
+            "`pip install 'biopsy[dataframe]'`."
         ) from exc
     return pd

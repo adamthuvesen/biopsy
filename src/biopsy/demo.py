@@ -1,4 +1,4 @@
-"""Generate a synthetic dataset for demoing sketch."""
+"""Generate a synthetic dataset for demoing biopsy."""
 
 from __future__ import annotations
 

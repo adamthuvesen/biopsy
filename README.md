@@ -1,9 +1,9 @@
-# sketch
+# biopsy
 
-ML-focused EDA as a Python library and CLI. Point `sketch` at a file or dataframe and get the few modeling risks and opportunities worth acting on: leakage suspects, target signal, drift, nulls, outliers, redundancy, and a ranked feature shortlist.
+ML-focused EDA as a Python library and CLI. Point `biopsy` at a file or dataframe and get the few modeling risks and opportunities worth acting on: leakage suspects, target signal, drift, nulls, outliers, redundancy, and a ranked feature shortlist.
 
 ```python
-from sketch import profile
+from biopsy import profile
 
 prof = profile(df, target="label")
 
@@ -16,14 +16,14 @@ prof.drop_candidates()
 The CLI uses the same profiling engine:
 
 ```bash
-sketch profile data.parquet --target label
-sketch profile data.parquet --target label --html report.html --open
-sketch demo --rows 5000
+biopsy profile data.parquet --target label
+biopsy profile data.parquet --target label --html report.html --open
+biopsy demo --rows 5000
 ```
 
 ## Why
 
-`ydata-profiling`, SweetViz, and DataPrep are broad report generators. `sketch` is opinionated: it ranks what matters for modeling and keeps the default view small enough to use before training a model.
+`ydata-profiling`, SweetViz, and DataPrep are broad report generators. `biopsy` is opinionated: it ranks what matters for modeling and keeps the default view small enough to use before training a model.
 
 ## What it reports
 
@@ -39,20 +39,20 @@ sketch demo --rows 5000
 Requires Python 3.11+.
 
 ```bash
-uv pip install sketch-eda
+uv pip install biopsy
 ```
 
 For dataframe frame helpers and in-memory pandas/polars/Arrow tests:
 
 ```bash
-uv pip install "sketch-eda[dataframe]"
+uv pip install "biopsy[dataframe]"
 ```
 
 For local development:
 
 ```bash
 git clone <repo>
-cd sketch
+cd biopsy
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
@@ -62,7 +62,7 @@ uv pip install -e ".[dev]"
 File input:
 
 ```python
-from sketch import profile
+from biopsy import profile
 
 prof = profile(
     "training.parquet",
@@ -78,7 +78,7 @@ Dataframe input:
 
 ```python
 import pandas as pd
-from sketch import profile
+from biopsy import profile
 
 df = pd.read_parquet("training.parquet")
 prof = profile(df, target="label", source_name="training frame")
@@ -120,12 +120,12 @@ Supported inputs:
 - Arrow Table or RecordBatchReader
 - DuckDB relations
 
-Pandas, Polars, and Arrow are optional dependencies. `sketch` registers in-memory objects with DuckDB and keeps the CLI dependency set small.
+Pandas, Polars, and Arrow are optional dependencies. `biopsy` registers in-memory objects with DuckDB and keeps the CLI dependency set small.
 
 ## CLI
 
 ```bash
-sketch profile <file> [options]
+biopsy profile <file> [options]
 ```
 
 | Flag | Default | Description |
@@ -157,7 +157,7 @@ Filters are ANDed and applied before sampling.
 ```bash
 uv run pytest tests/ -q
 uv run ruff check src tests
-uv run sketch demo --rows 1000 --no-html
+uv run biopsy demo --rows 1000 --no-html
 ```
 
 ## License

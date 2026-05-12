@@ -15,10 +15,10 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from sketch.correlations import CorrelationPair, TargetSignal
-from sketch.profile import Profile
-from sketch.stats import ColumnStats
-from sketch.temporal import TemporalReport, TemporalSignal
+from biopsy.correlations import CorrelationPair, TargetSignal
+from biopsy.profile import Profile
+from biopsy.stats import ColumnStats
+from biopsy.temporal import TemporalReport, TemporalSignal
 
 # --- palette ---------------------------------------------------------------
 
@@ -40,7 +40,7 @@ SEVERITY_COLOR = {"critical": CRIT, "warning": WARN, "info": ACCENT}
 # --- plotly template -------------------------------------------------------
 
 def _register_template() -> None:
-    pio.templates["sketch"] = go.layout.Template(
+    pio.templates["biopsy"] = go.layout.Template(
         layout=go.Layout(
             font=dict(
                 family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
@@ -104,7 +104,7 @@ def _histogram_fig(s: ColumnStats) -> str:
         else:
             fig.add_vline(x=q, line_width=1, line_dash="dot", line_color=INK_3)
     fig.update_layout(
-        template="sketch", height=200,
+        template="biopsy", height=200,
         margin=dict(l=30, r=10, t=20, b=30),
         showlegend=False,
         xaxis_title=None, yaxis_title=None,
@@ -125,7 +125,7 @@ def _temporal_column_fig(s: ColumnStats) -> str:
         hovertemplate="<b>%{x}</b><br>rows: %{y:,}<extra></extra>",
     )
     fig.update_layout(
-        template="sketch", height=200,
+        template="biopsy", height=200,
         margin=dict(l=30, r=10, t=20, b=40),
         showlegend=False,
         xaxis_title=None, yaxis_title=None,
@@ -151,7 +151,7 @@ def _bar_fig(s: ColumnStats) -> str:
         hovertemplate="<b>%{y}</b><br>count: %{x:,}<extra></extra>",
     )
     fig.update_layout(
-        template="sketch",
+        template="biopsy",
         height=max(180, 24 * len(labels) + 60),
         margin=dict(l=120, r=20, t=10, b=30),
         showlegend=False,
@@ -176,7 +176,7 @@ def _target_fig(signals: list[TargetSignal], target: str) -> str:
         hovertemplate="<b>%{y}</b><br>score: %{x:.3f}<extra></extra>",
     )
     fig.update_layout(
-        template="sketch",
+        template="biopsy",
         height=max(260, 22 * len(labels) + 60),
         margin=dict(l=140, r=20, t=10, b=30),
         showlegend=False,
@@ -213,7 +213,7 @@ def _shortlist_fig(shortlist: list) -> str:
         customdata=hover_text,
     )
     fig.update_layout(
-        template="sketch",
+        template="biopsy",
         height=max(280, 22 * len(labels) + 60),
         margin=dict(l=180, r=20, t=10, b=30),
         showlegend=False,
@@ -263,7 +263,7 @@ def _temporal_fig(report: TemporalReport) -> str:
     )
 
     fig.update_layout(
-        template="sketch",
+        template="biopsy",
         height=max(280, 22 * len(labels) + 80),
         margin=dict(l=150, r=20, t=30, b=40),
         barmode="overlay",
@@ -329,7 +329,7 @@ def _heatmap_fig(corrs: list[CorrelationPair], stats: dict[str, ColumnStats], ki
         colorbar=dict(thickness=10, len=0.6, outlinewidth=0),
     ))
     fig.update_layout(
-        template="sketch",
+        template="biopsy",
         height=max(360, 28 * n + 80),
         margin=dict(l=120, r=20, t=20, b=120),
     )

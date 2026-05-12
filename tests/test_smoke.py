@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from sketch.demo import synthetic_dataframe, write_demo_csv
-from sketch.profile import profile
-from sketch.render.html import render as render_html
+from biopsy.demo import synthetic_dataframe, write_demo_csv
+from biopsy.profile import profile
+from biopsy.render.html import render as render_html
 
 
 def test_profile_demo_dataset(tmp_path: Path) -> None:
@@ -283,7 +283,7 @@ def test_profile_frame_helpers_explain_missing_pandas(
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(ImportError, match=r"sketch-eda\[dataframe\]"):
+    with pytest.raises(ImportError, match=r"biopsy\[dataframe\]"):
         prof.findings_frame()
 
 
@@ -314,7 +314,7 @@ def test_filter_expression_reduces_rows(tmp_path: Path) -> None:
 
 
 def test_filter_parser_forms() -> None:
-    from sketch.io import parse_filter_expr
+    from biopsy.io import parse_filter_expr
     dtypes = {"segment": "VARCHAR", "value": "DOUBLE", "name": "VARCHAR"}
     assert parse_filter_expr("segment in train,test", dtypes) == \
         "\"segment\" IN ('train', 'test')"
@@ -327,7 +327,7 @@ def test_filter_parser_forms() -> None:
 
 def test_h3_filter_parser_symbolic_before_keyword() -> None:
     """H3: values containing 'in' must not hijack the parse as the IN op."""
-    from sketch.io import parse_filter_expr
+    from biopsy.io import parse_filter_expr
     dtypes = {"event_name": "VARCHAR", "desc": "VARCHAR", "email": "VARCHAR"}
     # `==` must win over `in` even though `in` appears later in the value
     assert parse_filter_expr("event_name == sign in", dtypes) == \
@@ -372,9 +372,9 @@ def test_target_signal_samples_after_target_filter(tmp_path: Path) -> None:
     """Sparse labeled targets should be sampled after dropping null targets."""
     import csv as csv_module
 
-    from sketch.correlations import target_signal
-    from sketch.io import load
-    from sketch.stats import compute_all
+    from biopsy.correlations import target_signal
+    from biopsy.io import load
+    from biopsy.stats import compute_all
 
     p = tmp_path / "sparse_target.csv"
     with p.open("w", newline="") as f:
@@ -396,9 +396,9 @@ def test_temporal_samples_after_time_filter(tmp_path: Path) -> None:
     """Sparse timestamp coverage should not make temporal analysis vanish."""
     import csv as csv_module
 
-    from sketch.io import load
-    from sketch.stats import compute_all
-    from sketch.temporal import temporal_signals
+    from biopsy.io import load
+    from biopsy.stats import compute_all
+    from biopsy.temporal import temporal_signals
 
     p = tmp_path / "sparse_time.csv"
     with p.open("w", newline="") as f:
@@ -420,7 +420,7 @@ def test_h2_spearman_handles_ties() -> None:
     """H2: _spearman must not produce spurious correlations on tied input."""
     import numpy as np
 
-    from sketch.correlations import _spearman
+    from biopsy.correlations import _spearman
     # All-tied x against monotone y → no signal
     rho = _spearman(np.array([5.0] * 100), np.arange(100, dtype=float))
     assert rho is None or abs(rho) < 0.01, f"tied input gave rho={rho}"
@@ -435,7 +435,7 @@ def test_split_pps_baseline_uses_train_and_test_indices() -> None:
     """Holdout PPS must ignore invalid rows outside the supplied split."""
     import numpy as np
 
-    from sketch.correlations import _pps_classification, _pps_regression
+    from biopsy.correlations import _pps_classification, _pps_regression
 
     train_idx = np.arange(60)
     test_idx = np.arange(60, 100)
@@ -507,7 +507,7 @@ def test_explicit_non_temporal_time_column_emits_info(tmp_path: Path) -> None:
 
 def test_m7_looks_like_id_no_false_positives() -> None:
     """M7: short words ending in 'id' (paid, liquid, valid) must not be flagged."""
-    from sketch.findings import _looks_like_id
+    from biopsy.findings import _looks_like_id
     assert _looks_like_id("id")
     assert _looks_like_id("user_id")
     assert _looks_like_id("uuid")
@@ -526,6 +526,6 @@ def test_html_render(tmp_path: Path) -> None:
     out = render_html(prof, tmp_path / "report.html")
     assert out.exists()
     content = out.read_text()
-    assert "sketch" in content
+    assert "biopsy" in content
     assert "churned" in content
     assert "plotly" in content.lower()

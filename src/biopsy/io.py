@@ -9,7 +9,7 @@ from typing import Any
 
 import duckdb
 
-REGISTERED_INPUT_VIEW = "__sketch_input__"
+REGISTERED_INPUT_VIEW = "__biopsy_input__"
 
 
 @dataclass(frozen=True)
@@ -146,7 +146,7 @@ def _input_scan(
         con.register(REGISTERED_INPUT_VIEW, data)
     except Exception as exc:
         raise TypeError(
-            "Unsupported input for sketch.profile(). Pass a file path or a "
+            "Unsupported input for biopsy.profile(). Pass a file path or a "
             "DuckDB-registerable table such as a pandas DataFrame, Polars "
             "DataFrame/LazyFrame, Arrow table, or DuckDB relation."
         ) from exc

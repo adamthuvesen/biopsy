@@ -17,9 +17,9 @@ import numpy as np
 from scipy.stats import ks_2samp
 from sklearn.preprocessing import LabelEncoder
 
-from sketch.correlations import _spearman, _valid_mask, pps
-from sketch.io import Source
-from sketch.stats import ColumnStats, _quote
+from biopsy.correlations import _spearman, _valid_mask, pps
+from biopsy.io import Source
+from biopsy.stats import ColumnStats, _quote
 
 # --- thresholds (single source of truth) ----------------------------------
 

@@ -9,13 +9,13 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from sketch.demo import write_demo_csv
-from sketch.profile import profile as profile_fn
-from sketch.render.html import render as render_html
-from sketch.render.terminal import render as render_terminal
+from biopsy.demo import write_demo_csv
+from biopsy.profile import profile as profile_fn
+from biopsy.render.html import render as render_html
+from biopsy.render.terminal import render as render_terminal
 
 app = typer.Typer(
-    name="sketch",
+    name="biopsy",
     help="Instant, opinionated EDA in the terminal.",
     no_args_is_help=True,
     add_completion=False,
@@ -60,7 +60,7 @@ def profile(
     render_terminal(prof, console=console)
 
     if html or open_browser:
-        out = html or Path(tempfile.gettempdir()) / f"sketch-{path.stem}.html"
+        out = html or Path(tempfile.gettempdir()) / f"biopsy-{path.stem}.html"
         rendered = render_html(prof, out)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
         if open_browser:
@@ -75,7 +75,7 @@ def demo(
 ) -> None:
     """Generate a synthetic dataset and profile it."""
     console = Console()
-    tmpdir = Path(tempfile.mkdtemp(prefix="sketch-demo-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="biopsy-demo-"))
     csv_path = tmpdir / "demo.csv"
     write_demo_csv(csv_path, n=n)
     console.print(f"[dim]Generated:[/dim] {csv_path}")

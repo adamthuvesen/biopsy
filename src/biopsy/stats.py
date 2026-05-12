@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sketch.io import Source, kind_of
+from biopsy.io import Source, kind_of
 
 
 @dataclass

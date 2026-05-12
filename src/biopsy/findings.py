@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sketch.correlations import CorrelationPair, TargetSignal
-from sketch.stats import ColumnStats
-from sketch.temporal import TemporalReport, is_target_drifted
+from biopsy.correlations import CorrelationPair, TargetSignal
+from biopsy.stats import ColumnStats
+from biopsy.temporal import TemporalReport, is_target_drifted
 
 
 @dataclass

@@ -16,8 +16,8 @@ from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from sketch.io import Source
-from sketch.stats import ColumnStats, _quote
+from biopsy.io import Source
+from biopsy.stats import ColumnStats, _quote
 
 
 @dataclass

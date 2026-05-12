@@ -1,17 +1,17 @@
-# AGENTS.md — sketch
+# AGENTS.md — biopsy
 
-Project-specific instructions for AI coding agents working on this repo. The user's global `~/dotfiles/agents/AGENTS.md` applies on top — this file overrides for sketch-specific concerns.
+Project-specific instructions for AI coding agents working on this repo. The user's global `~/dotfiles/agents/AGENTS.md` applies on top — this file overrides for biopsy-specific concerns.
 
 ## What this is
 
-`sketch` is an opinionated EDA library + CLI. Point it at a CSV or Parquet, get a ranked report of what actually matters for modeling — distributions, nulls, outliers, non-linear correlations, target signal (multi-metric), temporal leakage, redundancy-clustering shortlist.
+`biopsy` is an opinionated EDA library + CLI. Point it at a CSV or Parquet, get a ranked report of what actually matters for modeling — distributions, nulls, outliers, non-linear correlations, target signal (multi-metric), temporal leakage, redundancy-clustering shortlist.
 
 Audience: a data scientist running an initial pass before building a model. The differentiator vs `ydata-profiling` / `SweetViz` / `DataPrep` is **ranking and opinion** — surface the top dozen things to look at, not 200 pages.
 
 ## Layout
 
 ```
-src/sketch/
+src/biopsy/
 ├── io.py            # DuckDB loader, --filter expression parser, --exclude
 ├── stats.py         # per-column SQL aggregates, histograms, temporal buckets
 ├── correlations.py  # Pearson, MI, PPS (cv + holdout), Spearman, AUC, perm importance
@@ -20,7 +20,7 @@ src/sketch/
 ├── findings.py      # ranked findings synthesis
 ├── profile.py       # the orchestrator — entry point for the library API
 ├── cli.py           # Typer CLI
-├── demo.py          # synthetic dataset generator (used by `sketch demo` + tests)
+├── demo.py          # synthetic dataset generator (used by `biopsy demo` + tests)
 ├── sparkline.py     # unicode sparklines for terminal
 ├── render/
 │   ├── terminal.py  # Rich-rendered terminal report
@@ -33,7 +33,7 @@ tests/
 
 ## Stack + conventions
 
-- **Python 3.11+**, managed with `uv`. Source under `src/`, package name `sketch`.
+- **Python 3.11+**, managed with `uv`. Source under `src/`, package name `biopsy`.
 - **DuckDB-first**: column stats and Pearson correlations are computed in SQL where possible (no row transfer). Use `_quote_ident(col)` (in `io.py`) and `_quote(col)` (in `stats.py`) to safely build identifiers; use `_lit(value, is_numeric)` for literals.
 - **sklearn** for MI / PPS / AUC / permutation importance. **scipy** for `spearmanr` and `ks_2samp`. **plotly + jinja2** for HTML. **rich + typer** for CLI.
 - Type hints everywhere. Avoid generic `except Exception:` unless you're documenting why the failure is recoverable (it shouldn't silently turn into "no signal"; that hid a real bug — see review history).
@@ -66,9 +66,9 @@ uv pip install -e ".[dev]"
 pytest tests/                          # 16 tests, ~40s
 
 # CLI smoke
-sketch demo --rows 5000                # synthetic dataset
-sketch profile data.parquet --target y # real dataset
-sketch profile --help                  # all flags
+biopsy demo --rows 5000                # synthetic dataset
+biopsy profile data.parquet --target y # real dataset
+biopsy profile --help                  # all flags
 ```
 
 ## Useful flags (CLI)
@@ -87,7 +87,7 @@ sketch profile --help                  # all flags
 
 ## What's NOT done (deliberately deferred)
 
-- **`sketch compare A.parquet B.parquet`** — explicit train-vs-eval drift mode (the right home for arbitrary holdout drift; out of scope for v0.1)
+- **`biopsy compare A.parquet B.parquet`** — explicit train-vs-eval drift mode (the right home for arbitrary holdout drift; out of scope for v0.1)
 - **Notebook integration** — `Profile._repr_html_()` for inline Jupyter rendering
 - **Save/load profiles** — would help on the slow real-data runs (200s on 225k × 95)
 - **Regression-target end-to-end test** — `_pps_regression` is reachable but not covered by a real-data test
@@ -97,4 +97,4 @@ If you pick up any of these, follow the existing module boundaries and add a tes
 
 ## Engram / memory
 
-When discoveries here are worth surviving a tool switch, write to **Engram** with `project=sketch`. Tool-native memory (Claude/Codex) is for repo-local context.
+When discoveries here are worth surviving a tool switch, write to **Engram** with `project=biopsy`. Tool-native memory (Claude/Codex) is for repo-local context.
