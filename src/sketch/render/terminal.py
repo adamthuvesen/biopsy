@@ -51,7 +51,7 @@ def _header(prof: Profile) -> Panel:
     head = Text()
     head.append("sketch", style="bold magenta")
     head.append("  ")
-    head.append(str(prof.source_path), style="dim")
+    head.append(prof.source_name, style="dim")
     sub = Text.assemble(
         ("rows ", "dim"), (f"{prof.n_rows:,}", "bold"),
         ("   cols ", "dim"), (f"{prof.n_cols}", "bold"),
@@ -83,7 +83,12 @@ def _findings_panel(prof: Profile) -> Panel:
     if remaining > 0:
         table.add_row("", Text(f"… and {remaining} more", style="dim italic"), "")
 
-    return Panel(table, title="[bold]Top findings[/bold]", border_style="bright_black", padding=(1, 2))
+    return Panel(
+        table,
+        title="[bold]Top findings[/bold]",
+        border_style="bright_black",
+        padding=(1, 2),
+    )
 
 
 def _spark_for(s: ColumnStats, width: int = 24) -> str:
@@ -236,7 +241,9 @@ def _temporal_panel(prof: Profile) -> Panel:
             split = "—"
         drift = f"{s.drift_ks:.2f}" if s.drift_ks is not None else "—"
         mono = f"{s.time_monotonicity:.2f}" if s.time_monotonicity is not None else "—"
-        sev_color = {"critical": "red", "warning": "yellow", "info": "cyan"}.get(s.severity, "white")
+        sev_color = {"critical": "red", "warning": "yellow", "info": "cyan"}.get(
+            s.severity, "white"
+        )
         note = f"[{sev_color}]{s.reason}[/]"
         t.add_row(s.feature, split, drift, mono, note)
 
@@ -310,7 +317,12 @@ def _correlations_panel(prof: Profile) -> Panel:
         kind = "[magenta]non-linear[/magenta]" if p.is_nonlinear else "linear"
         t.add_row(p.a, p.b, r, mi, kind)
 
-    return Panel(t, title="[bold]Top correlations[/bold]", border_style="bright_black", padding=(0, 1))
+    return Panel(
+        t,
+        title="[bold]Top correlations[/bold]",
+        border_style="bright_black",
+        padding=(0, 1),
+    )
 
 
 def _footer(prof: Profile) -> Text:

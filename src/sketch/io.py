@@ -1,12 +1,15 @@
-"""DuckDB-backed loading for CSV / Parquet."""
+"""DuckDB-backed loading for files and in-memory tabular data."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import duckdb
+
+REGISTERED_INPUT_VIEW = "__sketch_input__"
 
 
 @dataclass(frozen=True)
@@ -14,11 +17,17 @@ class Source:
     """A loaded dataset, exposed as a DuckDB view named `data`."""
 
     con: duckdb.DuckDBPyConnection
-    path: Path
+    source_name: str
+    source_path: Path | None
     n_rows: int
     n_cols: int
     columns: list[str]
     dtypes: dict[str, str]
+
+    @property
+    def path(self) -> Path | None:
+        """Backward-compatible alias for file-backed sources."""
+        return self.source_path
 
     def sql(self, query: str) -> duckdb.DuckDBPyRelation:
         return self.con.sql(query)
@@ -38,25 +47,32 @@ def _scan_expr(path: Path) -> str:
 
 
 def load(
-    path: str | Path,
+    data: str | Path | Any | None = None,
     sample: int | None = None,
     exclude: list[str] | None = None,
     where: list[str] | None = None,
+    source_name: str | None = None,
+    path: str | Path | Any | None = None,
 ) -> Source:
-    """Open a file as a DuckDB view named `data`.
+    """Open a file or in-memory table as a DuckDB view named `data`.
 
     Parameters
     ----------
+    data: path, pandas/polars/Arrow object, or DuckDB relation.
     sample: random reservoir sample size (deterministic seed=42).
     exclude: column names to drop from the view (e.g. known target proxies).
     where: filter expressions, AND-ed together. See `parse_filter_expr`.
+    source_name: display name for in-memory data. File paths ignore this.
     """
-    path = Path(path).expanduser().resolve()
-    if not path.exists():
-        raise FileNotFoundError(path)
+    if data is None:
+        if path is None:
+            raise TypeError("load() missing required argument: 'data'")
+        data = path
+    elif path is not None:
+        raise TypeError("Pass either 'data' or 'path', not both.")
 
     con = duckdb.connect(":memory:")
-    scan = _scan_expr(path)
+    scan, resolved_path, display_name = _input_scan(con, data, source_name)
 
     # First materialize the raw scan so we know the schema for filter parsing
     # and exclusion validation.
@@ -102,12 +118,56 @@ def load(
 
     return Source(
         con=con,
-        path=path,
+        source_name=display_name,
+        source_path=resolved_path,
         n_rows=n_rows,
         n_cols=len(columns),
         columns=columns,
         dtypes=dtypes,
     )
+
+
+def _input_scan(
+    con: duckdb.DuckDBPyConnection,
+    data: str | Path | Any,
+    source_name: str | None,
+) -> tuple[str, Path | None, str]:
+    if isinstance(data, str | Path):
+        path = Path(data).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return _scan_expr(path), path, path.name
+
+    if isinstance(data, duckdb.DuckDBPyRelation):
+        _materialize_relation(con, data)
+        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe"
+
+    try:
+        con.register(REGISTERED_INPUT_VIEW, data)
+    except Exception as exc:
+        raise TypeError(
+            "Unsupported input for sketch.profile(). Pass a file path or a "
+            "DuckDB-registerable table such as a pandas DataFrame, Polars "
+            "DataFrame/LazyFrame, Arrow table, or DuckDB relation."
+        ) from exc
+    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe"
+
+
+def _materialize_relation(
+    con: duckdb.DuckDBPyConnection,
+    relation: duckdb.DuckDBPyRelation,
+) -> None:
+    columns = relation.columns
+    dtypes = [str(dtype) for dtype in relation.dtypes]
+    schema = ", ".join(
+        f"{_quote_ident(name)} {dtype}" for name, dtype in zip(columns, dtypes, strict=True)
+    )
+    con.execute(f"CREATE TABLE {REGISTERED_INPUT_VIEW} ({schema})")
+    rows = relation.fetchall()
+    if not rows:
+        return
+    placeholders = ", ".join("?" for _ in columns)
+    con.executemany(f"INSERT INTO {REGISTERED_INPUT_VIEW} VALUES ({placeholders})", rows)
 
 
 # --- filter expression parsing -------------------------------------------
@@ -139,11 +199,11 @@ def parse_filter_expr(expr: str, dtypes: dict[str, str]) -> str:
 
     Supported forms (column-first):
       - `segment in train,test,holdout`
-      - `plan not in free,trial`
+      - `label not in unknown,other`
       - `value > 0`
-      - `status == active`
-      - `signup_date >= 2025-01-01`
-      - `email is not null`
+      - `label == positive`
+      - `event_time >= 2025-01-01`
+      - `event_time is not null`
 
     Values are auto-typed by the column's declared dtype (numeric vs string).
     Strings are auto-quoted; commas separate list-op values (values cannot
@@ -208,7 +268,8 @@ def _find_leftmost_symbolic(expr: str) -> tuple[int, str] | None:
             if best_idx is None or idx < best_idx or (idx == best_idx and len(op) > len(best_op)):  # type: ignore[arg-type]
                 best_idx = idx
                 best_op = op
-            break  # take leftmost occurrence of this op; longer ops handled by length tie-break above
+            # Take this op's leftmost occurrence; length tie-break happens above.
+            break
     if best_idx is None or best_op is None:
         return None
     return best_idx, best_op

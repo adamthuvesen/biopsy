@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
+import json
 from pathlib import Path
 
-from sketch.demo import write_demo_csv
+import pytest
+
+from sketch.demo import synthetic_dataframe, write_demo_csv
 from sketch.profile import profile
 from sketch.render.html import render as render_html
 
@@ -34,6 +38,63 @@ def test_profile_demo_dataset(tmp_path: Path) -> None:
 
     # some target signals should be ranked
     assert len(prof.target_signals) > 0
+
+
+def test_profile_accepts_pandas_dataframe(tmp_path: Path) -> None:
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame(synthetic_dataframe(1200))
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
+
+    prof_df = profile(df, target="churned", source_name="demo frame")
+    prof_csv = profile(csv, target="churned")
+
+    assert prof_df.source_name == "demo frame"
+    assert prof_df.source_path is None
+    assert prof_df.n_rows == prof_csv.n_rows == 1200
+    assert set(prof_df.columns) == set(prof_csv.columns)
+    assert "days_since_last_login" in prof_df.leakage_suspects()
+
+
+def test_profile_keeps_path_keyword_compatibility(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=500)
+    prof = profile(path=csv, target="churned")
+
+    assert prof.source_name == "demo.csv"
+    assert prof.source_path == csv
+    assert prof.n_rows == 500
+
+
+def test_profile_accepts_polars_lazyframe() -> None:
+    pl = pytest.importorskip("polars")
+    df = pl.DataFrame(synthetic_dataframe(800)).lazy()
+
+    prof = profile(df, target="churned", source_name="polars demo")
+
+    assert prof.source_name == "polars demo"
+    assert prof.source_path is None
+    assert prof.n_rows == 800
+    assert "churned" in prof.columns
+
+
+def test_profile_accepts_arrow_table() -> None:
+    pa = pytest.importorskip("pyarrow")
+    table = pa.table(synthetic_dataframe(800))
+    prof = profile(table, target="churned", source_name="arrow demo")
+
+    assert prof.source_name == "arrow demo"
+    assert prof.n_rows == 800
+
+
+def test_profile_accepts_duckdb_relation() -> None:
+    import duckdb
+
+    con = duckdb.connect(":memory:")
+    relation = con.sql("SELECT 1 AS x, 0 AS y UNION ALL SELECT 2 AS x, 1 AS y")
+    prof = profile(relation, target="y", source_name="relation demo")
+
+    assert prof.source_name == "relation demo"
+    assert prof.source_path is None
+    assert prof.n_rows == 2
 
 
 def test_target_signals_have_new_metrics(tmp_path: Path) -> None:
@@ -157,6 +218,75 @@ def test_clustering_without_target(tmp_path: Path) -> None:
     assert methods == {"no_target"}
 
 
+def test_profile_ml_helpers_and_serialization(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=3000)
+    prof = profile(csv, target="churned")
+
+    assert prof.top_findings(limit=3) == prof.findings[:3]
+    assert all(f.category == "leakage" for f in prof.top_findings(category="leakage"))
+
+    shortlist = prof.feature_shortlist()
+    weak = {e.feature for e in prof.clusters.shortlist if e.is_weak} if prof.clusters else set()
+    assert shortlist
+    assert not weak.intersection(shortlist)
+    assert prof.feature_shortlist(limit=2) == shortlist[:2]
+
+    leakage = prof.leakage_suspects()
+    assert "days_since_last_login" in leakage
+    assert "churned" not in leakage
+
+    drops = prof.drop_candidates()
+    for col in ["constant_col", "user_id", "days_since_last_login"]:
+        assert col in drops
+    assert "churned" not in drops
+
+    payload = prof.to_dict()
+    assert payload["source_name"] == "demo.csv"
+    assert payload["source_path"] == str(csv)
+    assert payload["n_rows"] == 3000
+    encoded = prof.to_json()
+    assert json.loads(encoded)["target"] == "churned"
+    assert prof.findings_records()
+    assert prof.columns_records()
+    assert prof.target_signal_records()
+    assert prof.shortlist_records()
+
+
+def test_profile_pandas_frame_helpers(tmp_path: Path) -> None:
+    pd = pytest.importorskip("pandas")
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
+    prof = profile(csv, target="churned")
+
+    findings = prof.findings_frame()
+    columns = prof.columns_frame()
+    target = prof.target_signal_frame()
+    shortlist = prof.shortlist_frame()
+
+    assert isinstance(findings, pd.DataFrame)
+    assert {"severity", "category", "title"}.issubset(findings.columns)
+    assert "name" in columns.columns
+    assert "feature" in target.columns
+    assert "feature" in shortlist.columns
+
+
+def test_profile_frame_helpers_explain_missing_pandas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1000)
+    prof = profile(csv, target="churned")
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pandas":
+            raise ImportError("blocked")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(ImportError, match=r"sketch-eda\[dataframe\]"):
+        prof.findings_frame()
+
+
 def test_exclude_drops_columns(tmp_path: Path) -> None:
     csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
     prof = profile(csv, target="churned", exclude=["status", "constant_col"])
@@ -185,14 +315,14 @@ def test_filter_expression_reduces_rows(tmp_path: Path) -> None:
 
 def test_filter_parser_forms() -> None:
     from sketch.io import parse_filter_expr
-    dtypes = {"REGION": "VARCHAR", "value": "DOUBLE", "name": "VARCHAR"}
+    dtypes = {"segment": "VARCHAR", "value": "DOUBLE", "name": "VARCHAR"}
     assert parse_filter_expr("segment in train,test", dtypes) == \
-        "\"REGION\" IN ('train', 'test')"
+        "\"segment\" IN ('train', 'test')"
     assert parse_filter_expr("value > 0", dtypes) == '"value" > 0'
     assert parse_filter_expr("name is not null", dtypes) == '"name" IS NOT NULL'
-    assert parse_filter_expr("segment != holdout", dtypes) == "\"REGION\" <> 'train'"
+    assert parse_filter_expr("segment != holdout", dtypes) == "\"segment\" <> 'holdout'"
     # quoted values
-    assert parse_filter_expr("segment == 'train'", dtypes) == "\"REGION\" = 'train'"
+    assert parse_filter_expr("segment == 'train'", dtypes) == "\"segment\" = 'train'"
 
 
 def test_h3_filter_parser_symbolic_before_keyword() -> None:

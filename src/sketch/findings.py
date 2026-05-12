@@ -12,7 +12,7 @@ from sketch.temporal import TemporalReport, is_target_drifted
 @dataclass
 class Finding:
     severity: str  # "critical" | "warning" | "info"
-    category: str  # "leakage" | "suspicious" | "quality" | "distribution" | "correlation" | "target" | "temporal"
+    category: str
     title: str
     detail: str
     columns: list[str]
@@ -35,9 +35,7 @@ def _looks_like_id(name: str) -> bool:
         return True
     if n.endswith("_id"):
         return True
-    if "uuid" in n:
-        return True
-    return False
+    return "uuid" in n
 
 
 def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]:
@@ -60,7 +58,10 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             out.append(Finding(
                 severity="warning", category="suspicious",
                 title=f"`{s.name}` is constant",
-                detail=f"Only {s.n_unique} unique value(s) across {n_rows:,} rows — drop or investigate.",
+                detail=(
+                    f"Only {s.n_unique} unique value(s) across {n_rows:,} rows — "
+                    "drop or investigate."
+                ),
                 columns=[s.name], score=1.0,
             ))
             continue
@@ -72,7 +73,10 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             out.append(Finding(
                 severity="warning", category="suspicious",
                 title=f"`{s.name}` is near-constant ({pct:.1%})",
-                detail=f"Value '{top_val}' dominates {top_count:,} of {s.n - s.n_null:,} non-null rows.",
+                detail=(
+                    f"Value '{top_val}' dominates {top_count:,} of "
+                    f"{s.n - s.n_null:,} non-null rows."
+                ),
                 columns=[s.name], score=pct,
             ))
 
@@ -98,7 +102,10 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             out.append(Finding(
                 severity="warning", category="suspicious",
                 title=f"`{s.name}` looks like an identifier",
-                detail=f"All {s.n_unique:,} non-null values are unique — unlikely to be predictive.",
+                detail=(
+                    f"All {s.n_unique:,} non-null values are unique — "
+                    "unlikely to be predictive."
+                ),
                 columns=[s.name], score=0.9,
             ))
 
@@ -118,7 +125,10 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
                 out.append(Finding(
                     severity="info", category="distribution",
                     title=f"`{s.name}` has {s.n_outliers_iqr:,} IQR outliers ({rate:.1%})",
-                    detail=f"Values outside [Q1 − 1.5·IQR, Q3 + 1.5·IQR]. Min={s.min:.4g}, max={s.max:.4g}.",
+                    detail=(
+                        "Values outside [Q1 − 1.5·IQR, Q3 + 1.5·IQR]. "
+                        f"Min={s.min:.4g}, max={s.max:.4g}."
+                    ),
                     columns=[s.name], score=rate,
                 ))
 
@@ -150,7 +160,10 @@ def correlation_findings(pairs: list[CorrelationPair]) -> list[Finding]:
         elif p.is_nonlinear:
             out.append(Finding(
                 severity="info", category="correlation",
-                title=f"`{p.a}` ↔ `{p.b}` is non-linear (MI={p.mutual_info:.2f}, r={p.pearson:+.2f})",
+                title=(
+                    f"`{p.a}` ↔ `{p.b}` is non-linear "
+                    f"(MI={p.mutual_info:.2f}, r={p.pearson:+.2f})"
+                ),
                 detail="Mutual information far exceeds linear correlation.",
                 columns=[p.a, p.b], score=p.mutual_info or 0.0,
             ))

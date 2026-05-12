@@ -12,13 +12,13 @@ back to highest within-cluster median absolute correlation (the feature that
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
-from sketch.correlations import TargetSignal, _encode, _valid_mask
+from sketch.correlations import TargetSignal, _valid_mask
 from sketch.io import Source
 from sketch.stats import ColumnStats, _quote
 
