@@ -1,0 +1,10 @@
+.preview/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.claude/
+.DS_Store
