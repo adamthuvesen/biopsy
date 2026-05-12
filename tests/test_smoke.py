@@ -238,9 +238,58 @@ def test_h1_sample_after_filter(tmp_path: Path) -> None:
     )
 
 
+def test_target_signal_samples_after_target_filter(tmp_path: Path) -> None:
+    """Sparse labeled targets should be sampled after dropping null targets."""
+    import csv as csv_module
+
+    from sketch.correlations import target_signal
+    from sketch.io import load
+    from sketch.stats import compute_all
+
+    p = tmp_path / "sparse_target.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "y"])
+        for i in range(900):
+            w.writerow([i % 2, ""])
+        for i in range(100):
+            y = i % 2
+            w.writerow([y, y])
+
+    src = load(p)
+    stats = compute_all(src)
+    signals = target_signal(src, stats, "y", max_rows=200)
+    assert signals, "target signals should use all 100 labeled rows after filtering"
+
+
+def test_temporal_samples_after_time_filter(tmp_path: Path) -> None:
+    """Sparse timestamp coverage should not make temporal analysis vanish."""
+    import csv as csv_module
+
+    from sketch.io import load
+    from sketch.stats import compute_all
+    from sketch.temporal import temporal_signals
+
+    p = tmp_path / "sparse_time.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["event_date", "x"])
+        for i in range(1100):
+            w.writerow([f"2026-01-{(i % 30) + 1:02d}", i])
+        for i in range(900):
+            w.writerow(["", i])
+
+    src = load(p)
+    stats = compute_all(src)
+    report = temporal_signals(src, stats, "event_date", max_rows=1000)
+    assert report is not None
+    assert report.time_column == "event_date"
+
+
 def test_h2_spearman_handles_ties() -> None:
     """H2: _spearman must not produce spurious correlations on tied input."""
     import numpy as np
+
     from sketch.correlations import _spearman
     # All-tied x against monotone y → no signal
     rho = _spearman(np.array([5.0] * 100), np.arange(100, dtype=float))
@@ -250,6 +299,27 @@ def test_h2_spearman_handles_ties() -> None:
     y = 2 * x + 1
     rho = _spearman(x, y)
     assert rho is not None and rho > 0.99, f"monotone input gave rho={rho}"
+
+
+def test_split_pps_baseline_uses_train_and_test_indices() -> None:
+    """Holdout PPS must ignore invalid rows outside the supplied split."""
+    import numpy as np
+
+    from sketch.correlations import _pps_classification, _pps_regression
+
+    train_idx = np.arange(60)
+    test_idx = np.arange(60, 100)
+    split = (train_idx, test_idx)
+
+    y_class = np.array([0, 1] * 50 + [-1] * 20)
+    X_class = y_class.reshape(-1, 1).astype(float)
+    class_score = _pps_classification(X_class, y_class, split=split)
+    assert class_score > 0.9
+
+    y_reg = np.array(([0.0, 10.0] * 50) + ([float("nan")] * 20))
+    X_reg = np.nan_to_num(y_reg, nan=0.0).reshape(-1, 1)
+    reg_score = _pps_regression(X_reg, y_reg, split=split)
+    assert reg_score > 0.9
 
 
 def test_m5_all_null_column_is_quality_critical(tmp_path: Path) -> None:
@@ -264,11 +334,45 @@ def test_m5_all_null_column_is_quality_critical(tmp_path: Path) -> None:
 
     prof = profile(p)
     b_findings = [f for f in prof.findings if "b" in f.columns]
+    got = [(f.severity, f.category, f.title) for f in b_findings]
     assert any(f.category == "quality" and f.severity == "critical" for f in b_findings), (
-        f"expected critical-quality finding on 100%-null column; got {[(f.severity,f.category,f.title) for f in b_findings]}"
+        f"expected critical-quality finding on 100%-null column; got {got}"
     )
     # And NOT mislabeled as "constant"
     assert not any("constant" in f.title.lower() for f in b_findings)
+
+
+def test_numeric_near_constant_column_is_flagged(tmp_path: Path) -> None:
+    import csv as csv_module
+
+    p = tmp_path / "near_constant.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x"])
+        for i in range(1000):
+            w.writerow([0 if i < 995 else i])
+
+    prof = profile(p)
+    x_findings = [f for f in prof.findings if "x" in f.columns]
+    assert any("near-constant" in f.title for f in x_findings), (
+        f"expected numeric near-constant finding, got {[f.title for f in x_findings]}"
+    )
+
+
+def test_explicit_non_temporal_time_column_emits_info(tmp_path: Path) -> None:
+    import csv as csv_module
+
+    p = tmp_path / "bad_time.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["timeish", "x"])
+        for i in range(1500):
+            w.writerow([f"bucket-{i % 20}", i])
+
+    prof = profile(p, time_col="timeish")
+    assert prof.time_column is None
+    temporal_findings = [f for f in prof.findings if f.category == "temporal"]
+    assert any("not temporal" in f.detail.lower() for f in temporal_findings)
 
 
 def test_m7_looks_like_id_no_false_positives() -> None:

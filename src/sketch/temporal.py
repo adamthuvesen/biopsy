@@ -17,7 +17,7 @@ import numpy as np
 from scipy.stats import ks_2samp
 from sklearn.preprocessing import LabelEncoder
 
-from sketch.correlations import _encode, _spearman, _valid_mask, pps
+from sketch.correlations import _spearman, _valid_mask, pps
 from sketch.io import Source
 from sketch.stats import ColumnStats, _quote
 
@@ -60,8 +60,9 @@ class TemporalReport:
     time_column: str
     target: str | None
     signals: list[TemporalSignal]
-    target_drift: float | None     # binary: max-min rate; regression_ratio: max/min; regression_diff: max-min
-    target_drift_kind: str | None  # "binary" | "regression_ratio" | "regression_diff" | "multiclass" | None
+    # binary: max-min rate; regression_ratio: max/min; regression_diff: max-min
+    target_drift: float | None
+    target_drift_kind: str | None
     insufficient: str | None       # reason for skipping per-feature analysis, if any
 
 
@@ -79,6 +80,11 @@ def resolve_time_column(
     if explicit is not None:
         if explicit not in stats:
             return None, f"Time column '{explicit}' not found in dataset."
+        if stats[explicit].kind != "temporal":
+            return None, (
+                f"Time column '{explicit}' is {stats[explicit].dtype}, not temporal. "
+                "Pick a DATE/TIMESTAMP column or parse it before profiling."
+            )
         return explicit, None
 
     temporals = [name for name, s in stats.items() if s.kind == "temporal"]
@@ -147,15 +153,14 @@ def temporal_signals(
     cols_to_pull = features + ([target] if target else []) + [time_col]
     quoted = ", ".join(_quote(c) for c in cols_to_pull)
 
-    # Sample first, then order. This keeps the sample contiguous in time
-    # while still being a representative slice.
+    # Filter missing timestamps before sampling; DuckDB applies USING SAMPLE to
+    # the relation it is attached to.
     rel = src.con.execute(f"""
         SELECT {quoted}
         FROM (
-            SELECT * FROM data
+            SELECT {quoted} FROM data
             WHERE {_quote(time_col)} IS NOT NULL
-            USING SAMPLE {max_rows} ROWS (reservoir, 42)
-        )
+        ) USING SAMPLE {max_rows} ROWS (reservoir, 42)
         ORDER BY {_quote(time_col)}
     """)
     sample = rel.fetchall()
@@ -225,7 +230,11 @@ def temporal_signals(
     # order, not event time — demote all monotonic flags to a single warning.
     if monotonic_flags > max(2, len(signals) // 2):
         for s in signals:
-            if s.severity == "warning" and s.time_monotonicity and s.time_monotonicity >= MONOTONIC_THRESHOLD:
+            if (
+                s.severity == "warning"
+                and s.time_monotonicity
+                and s.time_monotonicity >= MONOTONIC_THRESHOLD
+            ):
                 s.severity = "info"
                 s.reason = f"Time-monotonic, but `{time_col}` looks like ingest order."
 
@@ -394,7 +403,10 @@ def _classify(
 def _enough_test_positives(y: np.ndarray, target_kind: str) -> bool:
     if target_kind != "classification":
         return True
-    return int((y == 1).sum()) >= MIN_TEST_POSITIVES_CLASSIF or int((y == 0).sum()) >= MIN_TEST_POSITIVES_CLASSIF
+    return (
+        int((y == 1).sum()) >= MIN_TEST_POSITIVES_CLASSIF
+        or int((y == 0).sum()) >= MIN_TEST_POSITIVES_CLASSIF
+    )
 
 
 # --- helpers ---------------------------------------------------------------

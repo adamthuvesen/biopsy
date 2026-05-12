@@ -111,6 +111,15 @@ def compute_column(src: Source, name: str, hist_bins: int = 24) -> ColumnStats:
         (stats.mean, stats.std, stats.min, stats.p01, stats.p25, stats.p50,
          stats.p75, stats.p99, stats.max, stats.skew, stats.kurtosis,
          stats.n_zero, stats.n_negative) = row
+        top = src.con.execute(f"""
+            SELECT {col}::VARCHAR, COUNT(*) AS c
+            FROM data
+            WHERE {col} IS NOT NULL
+            GROUP BY 1
+            ORDER BY c DESC
+            LIMIT 1
+        """).fetchall()
+        stats.top_values = [(v, c) for v, c in top]
         # skew/kurtosis are undefined for constant or near-constant columns
         if stats.std is None or stats.std == 0:
             stats.skew = None
@@ -141,7 +150,8 @@ def compute_column(src: Source, name: str, hist_bins: int = 24) -> ColumnStats:
 
         if kind == "text":
             lens = src.con.execute(
-                f"SELECT AVG(LENGTH({col}))::DOUBLE, MAX(LENGTH({col})) FROM data WHERE {col} IS NOT NULL"
+                f"SELECT AVG(LENGTH({col}))::DOUBLE, MAX(LENGTH({col})) "
+                f"FROM data WHERE {col} IS NOT NULL"
             ).fetchone()
             stats.avg_len, stats.max_len = lens
 

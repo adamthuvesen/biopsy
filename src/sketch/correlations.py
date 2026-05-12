@@ -3,9 +3,8 @@ and target-aware predictive signal."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.stats import ConstantInputWarning, spearmanr
@@ -17,7 +16,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from sketch.io import Source, kind_of
+from sketch.io import Source
 from sketch.stats import ColumnStats, _quote
 
 
@@ -73,9 +72,7 @@ def _valid_mask(values: np.ndarray) -> np.ndarray:
     """Boolean mask of non-null entries in an object/numeric array."""
     out = np.empty(len(values), dtype=bool)
     for i, v in enumerate(values):
-        if v is None:
-            out[i] = False
-        elif isinstance(v, float) and np.isnan(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
             out[i] = False
         else:
             out[i] = True
@@ -215,6 +212,8 @@ def _pps_classification(
                 scoring="f1_weighted",
             )
             model_score = float(scores.mean())
+            baseline_y = y
+            majority_source = y
         else:
             train_idx, test_idx = split
             if len(np.unique(y[train_idx])) < 2 or len(test_idx) < 10:
@@ -225,10 +224,17 @@ def _pps_classification(
             model_score = f1_score(
                 y[test_idx], preds, average="weighted", zero_division=0
             )
+            baseline_y = y[test_idx]
+            majority_source = y[train_idx]
     except Exception:
         return 0.0
-    majority = int(np.bincount(y).argmax())
-    naive_score = f1_score(y, np.full_like(y, majority), average="weighted", zero_division=0)
+    majority = int(np.bincount(majority_source).argmax())
+    naive_score = f1_score(
+        baseline_y,
+        np.full_like(baseline_y, majority),
+        average="weighted",
+        zero_division=0,
+    )
     if model_score <= naive_score:
         return 0.0
     return float((model_score - naive_score) / (1 - naive_score + 1e-9))
@@ -251,17 +257,24 @@ def _pps_regression(
                 X, y, cv=4, scoring="neg_mean_absolute_error",
             )
             model_mae = -float(neg_mae.mean())
+            baseline_y = y
+            median_source = y
         else:
             train_idx, test_idx = split
-            if len(test_idx) < 10:
+            if len(train_idx) < 10 or len(test_idx) < 10:
                 return 0.0
             reg = DecisionTreeRegressor(max_depth=4, random_state=42)
             reg.fit(X[train_idx], y[train_idx])
             preds = reg.predict(X[test_idx])
             model_mae = mean_absolute_error(y[test_idx], preds)
+            baseline_y = y[test_idx]
+            median_source = y[train_idx]
     except Exception:
         return 0.0
-    naive_mae = mean_absolute_error(y, np.full_like(y, np.median(y)))
+    naive_mae = mean_absolute_error(
+        baseline_y,
+        np.full_like(baseline_y, np.median(median_source)),
+    )
     if naive_mae <= 0:
         return 0.0
     return float(max(0.0, 1 - model_mae / naive_mae))
@@ -339,8 +352,9 @@ def target_signal(
 
     quoted = ", ".join(_quote(c) for c in features + [target])
     sample = src.con.execute(
-        f"SELECT {quoted} FROM data WHERE {_quote(target)} IS NOT NULL "
-        f"USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+        f"SELECT {quoted} FROM ("
+        f"SELECT {quoted} FROM data WHERE {_quote(target)} IS NOT NULL"
+        f") USING SAMPLE {max_rows} ROWS (reservoir, 42)"
     ).fetchall()
     if len(sample) < 30:
         return []
@@ -419,9 +433,14 @@ def target_signal(
 
     # leakage heuristic: PPS ≥ 0.85, OR PPS ≥ 0.6 AND >= 2× the next best feature.
     for i, s in enumerate(signals):
-        if s.score >= 0.85:
-            s.is_leak_suspect = True
-        elif s.score >= 0.6 and i + 1 < len(signals) and s.score >= 2 * signals[i + 1].score:
+        if (
+            s.score >= 0.85
+            or (
+                s.score >= 0.6
+                and i + 1 < len(signals)
+                and s.score >= 2 * signals[i + 1].score
+            )
+        ):
             s.is_leak_suspect = True
     return signals
 
