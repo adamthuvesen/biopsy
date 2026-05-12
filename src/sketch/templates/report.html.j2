@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sketch · {{ prof.source_path.name }}</title>
+<script src="{{ plotly_cdn }}" charset="utf-8"></script>
+<style>
+  :root {
+    --ink: {{ palette.ink }};
+    --ink-2: {{ palette.ink_2 }};
+    --ink-3: {{ palette.ink_3 }};
+    --surface: {{ palette.surface }};
+    --surface-2: {{ palette.surface_2 }};
+    --line: {{ palette.line }};
+    --accent: {{ palette.accent }};
+    --accent-soft: {{ palette.accent_soft }};
+    --warn: {{ palette.warn }};
+    --crit: {{ palette.crit }};
+    --ok: {{ palette.ok }};
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.06);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 100vh;
+  }
+  nav.side {
+    background: white;
+    border-right: 1px solid var(--line);
+    padding: 32px 24px;
+    position: sticky; top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  nav.side .brand {
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  nav.side .brand .dot { color: var(--accent); }
+  nav.side .file {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    word-break: break-all;
+    margin-bottom: 28px;
+  }
+  nav.side a {
+    display: block;
+    padding: 7px 10px;
+    margin: 0 -10px;
+    color: var(--ink-2);
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  nav.side a:hover { background: var(--surface-2); color: var(--ink); }
+  nav.side a .count { color: var(--ink-3); font-size: 11px; margin-left: 4px; }
+  nav.side .group-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    margin: 20px 0 6px;
+    font-weight: 600;
+  }
+
+  main { padding: 40px 56px 80px; max-width: 1280px; }
+  h1 {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+  }
+  h2 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 56px 0 16px;
+    color: var(--ink);
+  }
+  h2 .count { color: var(--ink-3); font-weight: 400; margin-left: 6px; font-size: 14px; }
+  .hero-meta {
+    display: flex; gap: 28px; margin-top: 14px; flex-wrap: wrap;
+    color: var(--ink-3); font-size: 13px;
+  }
+  .hero-meta b {
+    color: var(--ink); font-variant-numeric: tabular-nums;
+    font-weight: 600; margin-right: 4px;
+  }
+  .hero-meta .target b { color: var(--accent); }
+
+  .findings { display: flex; flex-direction: column; gap: 8px; }
+  .finding {
+    display: grid;
+    grid-template-columns: 18px 100px 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    padding: 12px 16px;
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+  .finding.critical { border-left: 3px solid var(--crit); }
+  .finding.warning  { border-left: 3px solid var(--warn); }
+  .finding.info     { border-left: 3px solid var(--accent); }
+  .finding .sev-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; margin-top: 6px;
+  }
+  .finding.critical .sev-dot { background: var(--crit); }
+  .finding.warning  .sev-dot { background: var(--warn); }
+  .finding.info     .sev-dot { background: var(--accent); }
+  .finding .category {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ink-3); font-weight: 600;
+  }
+  .finding .title { font-weight: 500; }
+  .finding .title code {
+    background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
+    font-size: 12px; color: var(--ink);
+  }
+  .finding .detail {
+    color: var(--ink-3); font-size: 13px;
+    grid-column: 3 / 5;
+    margin-top: 2px;
+  }
+  .finding .score {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--ink-3);
+  }
+
+  .cols { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  @media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+  .col-card {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .col-card header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .col-card h3 {
+    margin: 0; font-size: 14px; font-weight: 600;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .col-card .type {
+    font-size: 11px;
+    color: var(--ink-3);
+    text-transform: lowercase;
+    background: var(--surface-2);
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .col-card .stats {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    font-size: 12px; color: var(--ink-3);
+    margin-bottom: 10px;
+  }
+  .col-card .stats b {
+    color: var(--ink); font-variant-numeric: tabular-nums;
+    font-weight: 600; margin-right: 3px;
+  }
+  .col-card .stats .warn  b { color: var(--warn); }
+  .col-card .stats .crit  b { color: var(--crit); }
+  .col-card .chart { margin: 0 -8px; }
+
+  .heatmaps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1100px) { .heatmaps { grid-template-columns: 1fr; } }
+  .panel {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 20px 4px;
+    box-shadow: var(--shadow);
+  }
+  .panel h3 {
+    margin: 0 0 4px; font-size: 13px; font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .panel .hint { color: var(--ink-3); font-size: 12px; margin-bottom: 8px; }
+
+  table.target-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 6px;
+  }
+  table.target-table thead th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--ink-3);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.target-table tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.target-table tbody tr:last-child td { border-bottom: 0; }
+  table.target-table td.mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+  }
+  table.target-table td.num {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    width: 70px;
+  }
+  table.target-table td.note { color: var(--ink-3); font-size: 12px; }
+  table.target-table tr.leak td.note { color: var(--crit); font-weight: 500; }
+  table.target-table tr.leak td.mono::before {
+    content: "● "; color: var(--crit); font-size: 9px;
+  }
+  table.target-table tr.sev-critical td.note { color: var(--crit); }
+  table.target-table tr.sev-warning  td.note { color: var(--warn); }
+  table.target-table tr.sev-info     td.note { color: var(--accent); }
+  table.target-table tr.sev-critical td.mono::before {
+    content: "● "; color: var(--crit); font-size: 9px;
+  }
+  table.target-table tr.sev-warning td.mono::before {
+    content: "● "; color: var(--warn); font-size: 9px;
+  }
+
+  table.cluster-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 6px;
+  }
+  table.cluster-table thead th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--ink-3);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.cluster-table tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.cluster-table tbody tr:last-child td { border-bottom: 0; }
+  table.cluster-table td.num {
+    font-variant-numeric: tabular-nums;
+    width: 70px;
+    color: var(--ink-3);
+  }
+  table.cluster-table td.mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.7;
+  }
+  table.cluster-table td.mono b { color: var(--ink); font-weight: 600; }
+  table.cluster-table tr.picked td.num:first-child {
+    border-left: 2px solid var(--accent);
+    padding-left: 8px;
+  }
+
+  footer {
+    margin-top: 64px;
+    color: var(--ink-3); font-size: 12px;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
+  }
+  footer code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="side">
+    <div class="brand"><span class="dot">●</span> sketch</div>
+    <div class="file">{{ prof.source_path.name }}</div>
+
+    <a href="#findings">Findings <span class="count">{{ prof.findings|length }}</span></a>
+    {% if target_chart %}<a href="#target">Target signal</a>{% endif %}
+    {% if shortlist_chart %}<a href="#shortlist">Shortlist <span class="count">{{ shortlist|length }}</span></a>{% endif %}
+    {% if temporal_chart %}<a href="#temporal">Temporal</a>{% endif %}
+    <a href="#columns">Columns <span class="count">{{ prof.n_cols }}</span></a>
+    <a href="#correlations">Correlations</a>
+
+    {% if prof.findings %}
+    <div class="group-label">By severity</div>
+    {% set crit = prof.findings|selectattr("severity","equalto","critical")|list %}
+    {% set warn = prof.findings|selectattr("severity","equalto","warning")|list %}
+    {% set info = prof.findings|selectattr("severity","equalto","info")|list %}
+    {% if crit %}<a href="#findings"><span style="color:var(--crit)">●</span> Critical <span class="count">{{ crit|length }}</span></a>{% endif %}
+    {% if warn %}<a href="#findings"><span style="color:var(--warn)">●</span> Warning <span class="count">{{ warn|length }}</span></a>{% endif %}
+    {% if info %}<a href="#findings"><span style="color:var(--accent)">●</span> Info <span class="count">{{ info|length }}</span></a>{% endif %}
+    {% endif %}
+  </nav>
+
+  <main>
+    <h1>{{ prof.source_path.stem }}</h1>
+    <div class="hero-meta">
+      <div><b>{{ prof.n_rows|commafy }}</b> rows</div>
+      <div><b>{{ prof.n_cols }}</b> columns</div>
+      <div><b>{{ "%.2f"|format(prof.elapsed_seconds) }}s</b> to profile</div>
+      {% if prof.target %}<div class="target"><b>{{ prof.target }}</b> target</div>{% endif %}
+    </div>
+
+    {% if prof.findings %}
+    <h2 id="findings">Findings <span class="count">{{ prof.findings|length }}</span></h2>
+    <div class="findings">
+      {% for f in prof.findings %}
+      <div class="finding {{ f.severity }}">
+        <span class="sev-dot"></span>
+        <span class="category">{{ f.category }}</span>
+        <span class="title">{{ f.title|replace('`', '')|e }}</span>
+        <span class="score">{{ "%.2f"|format(f.score) }}</span>
+        {% if f.detail %}<div class="detail">{{ f.detail|e }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if target_chart %}
+    <h2 id="target">Target signal · {{ prof.target }}</h2>
+    <div class="panel">
+      <h3>Predictive power score per feature</h3>
+      <div class="hint">PPS = depth-capped tree, cross-validated, normalized vs. naive baseline. Red bars are leakage suspects.</div>
+      {{ target_chart|safe }}
+    </div>
+    <div class="panel" style="margin-top: 14px;">
+      <h3>Per-feature metrics</h3>
+      <div class="hint">PPS catches non-linear; MI any shape; Spearman monotone; AUC binary classifier signal; Perm = multivariate permutation importance.</div>
+      <table class="target-table">
+        <thead>
+          <tr><th>feature</th><th>pps</th><th>mi</th><th>ρ</th><th>auc</th><th>perm</th><th>note</th></tr>
+        </thead>
+        <tbody>
+          {% for s in target_signals[:25] %}
+          <tr {% if s.is_leak_suspect %}class="leak"{% endif %}>
+            <td class="mono">{{ s.feature }}</td>
+            <td class="num">{{ "%.2f"|format(s.score) }}</td>
+            <td class="num">{{ "%.2f"|format(s.mutual_info) }}</td>
+            <td class="num">{% if s.spearman is none %}—{% else %}{{ "%+.2f"|format(s.spearman) }}{% endif %}</td>
+            <td class="num">{% if s.auc is none %}—{% else %}{{ "%.2f"|format(s.auc) }}{% endif %}</td>
+            <td class="num">{% if s.perm_importance is none %}—{% else %}{{ "%.2f"|format(s.perm_importance) }}{% endif %}</td>
+            <td class="note">{% if s.is_leak_suspect %}leakage suspect{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if shortlist_chart %}
+    <h2 id="shortlist">Shortlist <span class="count">{{ shortlist|length }} of {{ clusters|length }} clusters · |ρ| ≥ {{ "%.2f"|format(1 - cluster_cutoff) }}</span></h2>
+    <div class="panel">
+      <h3>Cluster representatives, ranked</h3>
+      <div class="hint">
+        Features are grouped by rank-correlation (Spearman); one representative
+        per cluster by best target-aware score. Purple bars are multi-member
+        clusters (redundancy reduced); indigo are singletons.
+      </div>
+      {{ shortlist_chart|safe }}
+    </div>
+    <div class="panel" style="margin-top: 14px;">
+      <h3>Cluster map</h3>
+      <div class="hint">Cluster representatives are <b>bolded</b>; other members are correlated alternatives.</div>
+      <table class="cluster-table">
+        <thead>
+          <tr><th>cluster</th><th>size</th><th>mean |ρ|</th><th>members</th></tr>
+        </thead>
+        <tbody>
+          {% for c in clusters %}
+          <tr {% if c.in_shortlist %}class="picked"{% endif %}>
+            <td class="num">c{{ c.cluster_id }}</td>
+            <td class="num">{{ c.size }}</td>
+            <td class="num">{{ "%.2f"|format(c.mean_abs_correlation) }}</td>
+            <td class="mono">
+              {%- for m in c.members -%}
+                {% if m == c.representative %}<b>{{ m }}</b>{% else %}{{ m }}{% endif %}{% if not loop.last %} · {% endif %}
+              {%- endfor -%}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if temporal_chart %}
+    <h2 id="temporal">Temporal · {{ prof.temporal.time_column }}</h2>
+    <div class="panel">
+      <h3>Random CV vs. time-ordered split</h3>
+      <div class="hint">
+        Features whose predictive power collapses on a time-ordered split likely encode
+        future information. Bigger gap = stronger leak signal.
+      </div>
+      {{ temporal_chart|safe }}
+    </div>
+    {% if temporal_signals %}
+    <div class="panel" style="margin-top: 14px;">
+      <h3>Temporal anomalies</h3>
+      <table class="target-table">
+        <thead>
+          <tr><th>feature</th><th>random→time</th><th>drift</th><th>monotonicity</th><th>finding</th></tr>
+        </thead>
+        <tbody>
+          {% for s in temporal_signals %}
+          <tr class="sev-{{ s.severity }}">
+            <td class="mono">{{ s.feature }}</td>
+            <td class="num">
+              {% if s.random_pps is none or s.time_pps is none %}—
+              {% else %}{{ "%.2f"|format(s.random_pps) }} → {{ "%.2f"|format(s.time_pps) }}{% endif %}
+            </td>
+            <td class="num">{% if s.drift_ks is none %}—{% else %}{{ "%.2f"|format(s.drift_ks) }}{% endif %}</td>
+            <td class="num">{% if s.time_monotonicity is none %}—{% else %}{{ "%.2f"|format(s.time_monotonicity) }}{% endif %}</td>
+            <td class="note">{{ s.reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <h2 id="columns">Columns <span class="count">{{ prof.n_cols }}</span></h2>
+    <div class="cols">
+      {% for item in columns %}
+      {% set s = item.stats %}
+      <div class="col-card">
+        <header>
+          <h3>{{ s.name }}</h3>
+          <span class="type">{{ s.dtype|lower }}</span>
+        </header>
+        <div class="stats">
+          <div><b>{{ s.n_unique|commafy }}</b> unique</div>
+          {% if s.null_rate > 0.5 %}
+            <div class="crit"><b>{{ s.null_rate|pct }}</b> null</div>
+          {% elif s.null_rate > 0.1 %}
+            <div class="warn"><b>{{ s.null_rate|pct }}</b> null</div>
+          {% else %}
+            <div><b>{{ s.null_rate|pct }}</b> null</div>
+          {% endif %}
+          {% if s.kind == "numeric" and s.mean is not none %}
+            <div>μ <b>{{ s.mean|num }}</b></div>
+            <div>σ <b>{{ s.std|num }}</b></div>
+            <div>[{{ s.min|num }} … {{ s.max|num }}]</div>
+            {% if s.skew is not none and s.skew|abs > 1 %}
+              <div class="{% if s.skew|abs > 3 %}crit{% else %}warn{% endif %}">skew <b>{{ "%+.2f"|format(s.skew) }}</b></div>
+            {% endif %}
+            {% if s.n_outliers_iqr %}
+              <div class="warn"><b>{{ s.n_outliers_iqr|commafy }}</b> outliers</div>
+            {% endif %}
+          {% endif %}
+        </div>
+        {% if item.chart %}<div class="chart">{{ item.chart|safe }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if pearson_heatmap or mi_heatmap %}
+    <h2 id="correlations">Correlations</h2>
+    <div class="heatmaps">
+      {% if pearson_heatmap %}
+      <div class="panel">
+        <h3>Pearson — linear</h3>
+        <div class="hint">−1 to +1. Blue = negative, red = positive.</div>
+        {{ pearson_heatmap|safe }}
+      </div>
+      {% endif %}
+      {% if mi_heatmap %}
+      <div class="panel">
+        <h3>Mutual information — any shape</h3>
+        <div class="hint">0 to 1. Catches non-linear relationships missed by Pearson.</div>
+        {{ mi_heatmap|safe }}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <footer>
+      Generated by <code>sketch profile</code> · {{ prof.source_path }}
+    </footer>
+  </main>
+</div>
+</body>
+</html>

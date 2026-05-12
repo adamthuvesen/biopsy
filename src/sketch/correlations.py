@@ -1,0 +1,495 @@
+"""Correlation analyses: Pearson (linear), mutual information (non-linear),
+and target-aware predictive signal."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import warnings
+
+import numpy as np
+from scipy.stats import ConstantInputWarning, spearmanr
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import f1_score, mean_absolute_error, roc_auc_score
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+
+from sketch.io import Source, kind_of
+from sketch.stats import ColumnStats, _quote
+
+
+@dataclass
+class CorrelationPair:
+    a: str
+    b: str
+    pearson: float | None
+    mutual_info: float | None  # normalized to [0, 1]
+
+    @property
+    def score(self) -> float:
+        """Best available association strength in [0, 1]."""
+        candidates = []
+        if self.pearson is not None and not np.isnan(self.pearson):
+            candidates.append(abs(self.pearson))
+        if self.mutual_info is not None:
+            candidates.append(self.mutual_info)
+        return max(candidates) if candidates else 0.0
+
+    @property
+    def is_nonlinear(self) -> bool:
+        """MI noticeably exceeds Pearson — relationship has a non-linear component."""
+        if self.mutual_info is None or self.pearson is None:
+            return False
+        return self.mutual_info - abs(self.pearson) > 0.15
+
+
+def pearson_matrix(src: Source, stats: dict[str, ColumnStats]) -> dict[tuple[str, str], float]:
+    """Pearson via DuckDB's corr() — fast, no row transfer."""
+    numeric = [n for n, s in stats.items() if s.kind == "numeric" and not s.is_constant]
+    pairs: dict[tuple[str, str], float] = {}
+    if len(numeric) < 2:
+        return pairs
+
+    # one SQL per pair is cheap on a single-table scan; DuckDB caches columns
+    select_parts = []
+    keys = []
+    for i, a in enumerate(numeric):
+        for b in numeric[i + 1:]:
+            select_parts.append(f"corr({_quote(a)}, {_quote(b)})")
+            keys.append((a, b))
+    if not select_parts:
+        return pairs
+    row = src.con.execute(f"SELECT {', '.join(select_parts)} FROM data").fetchone()
+    for key, val in zip(keys, row, strict=True):
+        if val is not None and not (isinstance(val, float) and np.isnan(val)):
+            pairs[key] = float(val)
+    return pairs
+
+
+def _valid_mask(values: np.ndarray) -> np.ndarray:
+    """Boolean mask of non-null entries in an object/numeric array."""
+    out = np.empty(len(values), dtype=bool)
+    for i, v in enumerate(values):
+        if v is None:
+            out[i] = False
+        elif isinstance(v, float) and np.isnan(v):
+            out[i] = False
+        else:
+            out[i] = True
+    return out
+
+
+def _encode(values: np.ndarray, kind: str) -> tuple[np.ndarray, bool]:
+    """Encode a *clean* (no nulls) 1D array. Returns (array, is_discrete)."""
+    if kind == "numeric":
+        return np.asarray(values, dtype=np.float64), False
+    encoded = LabelEncoder().fit_transform(np.asarray(values, dtype=str))
+    return encoded.astype(np.float64), True
+
+
+def mutual_info_matrix(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    max_rows: int = 20_000,
+) -> dict[tuple[str, str], float]:
+    """Pairwise mutual information for numeric + low-cardinality categorical columns.
+
+    Normalized to [0, 1] via 1 - exp(-2 * MI), a standard transform that maps MI to a
+    correlation-like scale.
+    """
+    eligible = [
+        n for n, s in stats.items()
+        if not s.is_constant
+        and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 50))
+    ]
+    if len(eligible) < 2:
+        return {}
+
+    quoted = ", ".join(_quote(c) for c in eligible)
+    sample = src.con.execute(
+        f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+    ).fetchall()
+    if not sample:
+        return {}
+    raw = np.array(sample, dtype=object)
+    masks = [_valid_mask(raw[:, j]) for j in range(len(eligible))]
+
+    pairs: dict[tuple[str, str], float] = {}
+    for i, a in enumerate(eligible):
+        for j_off, b in enumerate(eligible[i + 1:], start=i + 1):
+            valid = masks[i] & masks[j_off]
+            if valid.sum() < 30:
+                continue
+            ea, da = _encode(raw[valid, i], stats[a].kind)
+            eb, db = _encode(raw[valid, j_off], stats[b].kind)
+
+            X = ea.reshape(-1, 1)
+            try:
+                if db:
+                    mi = mutual_info_classif(
+                        X, eb.astype(int), discrete_features=[da], random_state=42
+                    )[0]
+                else:
+                    mi = mutual_info_regression(
+                        X, eb, discrete_features=[da], random_state=42
+                    )[0]
+            except Exception:
+                continue
+            mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
+            pairs[(a, b)] = mi_norm
+    return pairs
+
+
+def correlation_pairs(
+    src: Source, stats: dict[str, ColumnStats]
+) -> list[CorrelationPair]:
+    pearson = pearson_matrix(src, stats)
+    mi = mutual_info_matrix(src, stats)
+
+    keys = set(pearson) | set(mi)
+    out = [
+        CorrelationPair(a=a, b=b, pearson=pearson.get((a, b)), mutual_info=mi.get((a, b)))
+        for (a, b) in keys
+    ]
+    out.sort(key=lambda p: p.score, reverse=True)
+    return out
+
+
+@dataclass
+class TargetSignal:
+    feature: str
+    score: float                        # PPS-style out-of-sample predictive score, [0, 1]
+    mutual_info: float                  # MI-normalized score, [0, 1]
+    method: str                         # "pps_classif" | "pps_regress"
+    spearman: float | None = None       # signed rank correlation, [-1, 1]
+    auc: float | None = None            # normalized 2·|AUC−0.5|, binary classif only, [0, 1]
+    perm_importance: float | None = None  # multivariate, normalized [0, 1]
+    is_leak_suspect: bool = False
+
+    @property
+    def best_score(self) -> float:
+        """Highest signal strength across robust metrics. Used for ranking when
+        PPS is degenerate (extremely imbalanced targets).
+
+        Spearman is intentionally excluded — it can saturate near 1.0 on
+        sparse or near-constant inputs, overstating real signal. (Matches the
+        criteria used by clustering._score_for_ranking.)
+        """
+        candidates = [self.score, self.mutual_info]
+        if self.auc is not None:
+            candidates.append(self.auc)
+        if self.perm_importance is not None:
+            candidates.append(self.perm_importance)
+        return max(candidates)
+
+
+def _pps_classification(
+    X: np.ndarray,
+    y: np.ndarray,
+    split: tuple[np.ndarray, np.ndarray] | None = None,
+) -> float:
+    """F1 (weighted) of a depth-capped decision tree vs. majority-class baseline.
+
+    split=None → cross-validated. split=(train_idx, test_idx) → single holdout.
+    Normalized to [0, 1] where 0 = no better than naive, 1 = perfect.
+    """
+    if len(np.unique(y)) < 2:
+        return 0.0
+    # Determine safe CV fold count: needs at least 2 samples of the minority
+    # class. If the minority has fewer than 2, cross-validated PPS is undefined.
+    if y.min() >= 0:
+        minority = int(np.bincount(y).min())
+        if minority < 2:
+            return 0.0
+        cv_folds = max(2, min(4, minority))
+    else:
+        cv_folds = 4
+    try:
+        if split is None:
+            scores = cross_val_score(
+                DecisionTreeClassifier(max_depth=4, random_state=42),
+                X, y, cv=cv_folds,
+                scoring="f1_weighted",
+            )
+            model_score = float(scores.mean())
+        else:
+            train_idx, test_idx = split
+            if len(np.unique(y[train_idx])) < 2 or len(test_idx) < 10:
+                return 0.0
+            clf = DecisionTreeClassifier(max_depth=4, random_state=42)
+            clf.fit(X[train_idx], y[train_idx])
+            preds = clf.predict(X[test_idx])
+            model_score = f1_score(
+                y[test_idx], preds, average="weighted", zero_division=0
+            )
+    except Exception:
+        return 0.0
+    majority = int(np.bincount(y).argmax())
+    naive_score = f1_score(y, np.full_like(y, majority), average="weighted", zero_division=0)
+    if model_score <= naive_score:
+        return 0.0
+    return float((model_score - naive_score) / (1 - naive_score + 1e-9))
+
+
+def _pps_regression(
+    X: np.ndarray,
+    y: np.ndarray,
+    split: tuple[np.ndarray, np.ndarray] | None = None,
+) -> float:
+    """MAE of a depth-capped tree vs. median baseline.
+
+    split=None → cross-validated. split=(train_idx, test_idx) → single holdout.
+    Normalized: PPS = max(0, 1 - model_mae / naive_mae).
+    """
+    try:
+        if split is None:
+            neg_mae = cross_val_score(
+                DecisionTreeRegressor(max_depth=4, random_state=42),
+                X, y, cv=4, scoring="neg_mean_absolute_error",
+            )
+            model_mae = -float(neg_mae.mean())
+        else:
+            train_idx, test_idx = split
+            if len(test_idx) < 10:
+                return 0.0
+            reg = DecisionTreeRegressor(max_depth=4, random_state=42)
+            reg.fit(X[train_idx], y[train_idx])
+            preds = reg.predict(X[test_idx])
+            model_mae = mean_absolute_error(y[test_idx], preds)
+    except Exception:
+        return 0.0
+    naive_mae = mean_absolute_error(y, np.full_like(y, np.median(y)))
+    if naive_mae <= 0:
+        return 0.0
+    return float(max(0.0, 1 - model_mae / naive_mae))
+
+
+def pps(
+    X: np.ndarray,
+    y: np.ndarray,
+    target_kind: str,
+    split: tuple[np.ndarray, np.ndarray] | None = None,
+) -> float:
+    """Public PPS entry point — dispatches to classification or regression."""
+    if target_kind == "classification":
+        return _pps_classification(X, y.astype(int), split=split)
+    return _pps_regression(X, y, split=split)
+
+
+def _spearman(x: np.ndarray, y: np.ndarray) -> float | None:
+    """Signed rank correlation. Uses scipy's average-rank implementation so
+    tied values get tied ranks (avoids spurious correlations on near-constant
+    inputs)."""
+    if len(x) < 5 or len(y) != len(x):
+        return None
+    try:
+        with warnings.catch_warnings():
+            # constant input is a valid "no signal" case; we return None below
+            warnings.simplefilter("ignore", ConstantInputWarning)
+            result = spearmanr(x, y, nan_policy="omit")
+    except Exception:
+        return None
+    rho = float(result.statistic)
+    if np.isnan(rho):
+        return None
+    return rho
+
+
+def _normalized_auc(y: np.ndarray, score: np.ndarray) -> float | None:
+    """AUC normalized so 0 = no signal, 1 = perfect."""
+    if len(np.unique(y)) != 2:
+        return None
+    try:
+        auc = roc_auc_score(y, score)
+    except Exception:
+        return None
+    return float(2 * abs(auc - 0.5))
+
+
+def target_signal(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    target: str,
+    max_rows: int = 30_000,
+) -> list[TargetSignal]:
+    """Rank features by association with the target.
+
+    For numeric targets: MI regression. For low-cardinality targets: MI classification.
+    Pearson is computed too when both are numeric.
+    """
+    if target not in stats:
+        raise ValueError(f"Target column not found: {target}")
+    t_stats = stats[target]
+    target_kind = "classification" if (
+        t_stats.kind in {"text", "bool"} or
+        (t_stats.kind == "numeric" and t_stats.n_unique <= 20)
+    ) else "regression"
+
+    features = [
+        n for n, s in stats.items()
+        if n != target
+        and not s.is_constant
+        and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 100))
+    ]
+    if not features:
+        return []
+
+    quoted = ", ".join(_quote(c) for c in features + [target])
+    sample = src.con.execute(
+        f"SELECT {quoted} FROM data WHERE {_quote(target)} IS NOT NULL "
+        f"USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+    ).fetchall()
+    if len(sample) < 30:
+        return []
+    raw = np.array(sample, dtype=object)
+    target_mask = _valid_mask(raw[:, -1])
+
+    if target_kind == "classification":
+        y_full = LabelEncoder().fit_transform(raw[target_mask, -1].astype(str)).astype(int)
+    else:
+        y_full = np.asarray(raw[target_mask, -1], dtype=np.float64)
+
+    is_binary_target = target_kind == "classification" and len(np.unique(y_full)) == 2
+
+    # collect encoded per-feature arrays for the optional joint permutation importance
+    feat_records: list[tuple[str, np.ndarray, bool, np.ndarray]] = []  # (name, x_enc, x_disc, mask)
+
+    signals: list[TargetSignal] = []
+    for j, feat in enumerate(features):
+        feat_mask = _valid_mask(raw[:, j]) & target_mask
+        if feat_mask.sum() < 30:
+            continue
+
+        x_enc, x_disc = _encode(raw[feat_mask, j], stats[feat].kind)
+        y_sub_mask = feat_mask[target_mask]
+        y_sub = y_full[y_sub_mask]
+        X = x_enc.reshape(-1, 1)
+
+        try:
+            if target_kind == "classification":
+                mi = mutual_info_classif(
+                    X, y_sub.astype(int), discrete_features=[x_disc], random_state=42
+                )[0]
+                pps_score = _pps_classification(X, y_sub.astype(int))
+                method = "pps_classif"
+            else:
+                mi = mutual_info_regression(
+                    X, y_sub, discrete_features=[x_disc], random_state=42
+                )[0]
+                pps_score = _pps_regression(X, y_sub)
+                method = "pps_regress"
+        except Exception:
+            continue
+
+        mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
+
+        # Spearman: numeric feature only; numeric or binary target
+        spearman = None
+        if stats[feat].kind == "numeric" and (
+            target_kind == "regression" or is_binary_target
+        ):
+            spearman = _spearman(x_enc, y_sub.astype(np.float64))
+
+        # AUC: only binary classification target
+        auc = _normalized_auc(y_sub.astype(int), x_enc) if is_binary_target else None
+
+        signals.append(TargetSignal(
+            feature=feat, score=pps_score, mutual_info=mi_norm, method=method,
+            spearman=spearman, auc=auc,
+        ))
+        feat_records.append((feat, x_enc, x_disc, feat_mask))
+
+    # Multivariate permutation importance from a single RF fit on the intersection
+    # of rows where every feature is valid. Skipped if too few rows survive.
+    _attach_permutation_importance(
+        signals, feat_records, y_full, target_mask, target_kind,
+    )
+
+    # If PPS is degenerate across the board (e.g., extreme class imbalance makes
+    # naive baseline unbeatable), fall back to best-available-metric ranking so
+    # AUC / permutation importance can surface real signal.
+    max_pps = max((s.score for s in signals), default=0.0)
+    if max_pps < 0.05:
+        signals.sort(key=lambda s: s.best_score, reverse=True)
+    else:
+        signals.sort(key=lambda s: s.score, reverse=True)
+
+    # leakage heuristic: PPS ≥ 0.85, OR PPS ≥ 0.6 AND >= 2× the next best feature.
+    for i, s in enumerate(signals):
+        if s.score >= 0.85:
+            s.is_leak_suspect = True
+        elif s.score >= 0.6 and i + 1 < len(signals) and s.score >= 2 * signals[i + 1].score:
+            s.is_leak_suspect = True
+    return signals
+
+
+def _attach_permutation_importance(
+    signals: list[TargetSignal],
+    feat_records: list[tuple[str, np.ndarray, bool, np.ndarray]],
+    y_full: np.ndarray,
+    target_mask: np.ndarray,
+    target_kind: str,
+) -> None:
+    """Fit one RandomForest on all features, then compute permutation importance.
+
+    Nulls are median-imputed per feature so wide tables with sparse columns still
+    yield a meaningful joint design matrix.
+    """
+    if len(feat_records) < 2:
+        return
+
+    n = int(target_mask.sum())
+    cols = []
+    kept_signal_idx: list[int] = []  # parallel to cols; index into `signals`
+    for i, (_name, x_enc, _disc, fmask) in enumerate(feat_records):
+        feat_in_target = fmask[target_mask]
+        col = np.full(n, np.nan, dtype=np.float64)
+        col[feat_in_target] = x_enc
+        if np.isnan(col).any():
+            valid = ~np.isnan(col)
+            if valid.sum() < 30:
+                continue
+            col[~valid] = float(np.median(col[valid]))
+        cols.append(col)
+        kept_signal_idx.append(i)
+
+    if len(cols) < 2:
+        return
+
+    X = np.column_stack(cols)
+    y = y_full
+    if X.shape[0] < 100:
+        return
+
+    try:
+        if target_kind == "classification":
+            if len(np.unique(y)) < 2:
+                return
+            # class_weight='balanced' helps the model attend to rare classes;
+            # AUC scoring is robust to class imbalance for binary targets.
+            model = RandomForestClassifier(
+                n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+                class_weight="balanced",
+            )
+            scoring = "roc_auc" if len(np.unique(y)) == 2 else "f1_weighted"
+        else:
+            model = RandomForestRegressor(
+                n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+            )
+            scoring = "neg_mean_absolute_error"
+        model.fit(X, y)
+        result = permutation_importance(
+            model, X, y, n_repeats=5, random_state=42, scoring=scoring, n_jobs=-1,
+        )
+    except Exception:
+        return
+
+    importances = result.importances_mean
+    if importances.max() <= 0:
+        return
+    normalized = importances / importances.max()
+    for sig_idx, imp in zip(kept_signal_idx, normalized, strict=True):
+        signals[sig_idx].perm_importance = float(max(imp, 0.0))
