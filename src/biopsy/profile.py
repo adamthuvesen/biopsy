@@ -32,6 +32,15 @@ from biopsy.temporal import TemporalReport, resolve_time_column, temporal_signal
 
 @dataclass
 class Profile:
+    """A profiled dataset: column stats, correlations, target signal,
+    temporal report, redundancy clusters, and ranked findings.
+
+    Built by `biopsy.profile(...)`. Use `top_findings()`, `leakage_suspects()`,
+    `feature_shortlist()`, `drop_candidates()` for the curated views; access
+    `columns`, `correlations`, etc. directly for the full payload. Pandas
+    callers can use the `*_frame()` helpers.
+    """
+
     source_name: str
     source_path: Path | None
     n_rows: int
@@ -127,7 +136,7 @@ class Profile:
 
 
 def profile(
-    data: str | Path | Any | None = None,
+    data: str | Path | Any,
     target: str | None = None,
     time_col: str | None = None,
     sample: int | None = None,
@@ -137,15 +146,7 @@ def profile(
     exclude: list[str] | None = None,
     where: list[str] | None = None,
     source_name: str | None = None,
-    path: str | Path | Any | None = None,
 ) -> Profile:
-    if data is None:
-        if path is None:
-            raise TypeError("profile() missing required argument: 'data'")
-        data = path
-    elif path is not None:
-        raise TypeError("Pass either 'data' or 'path', not both.")
-
     t0 = time.perf_counter()
     src: Source = load(data, sample=sample, exclude=exclude, where=where, source_name=source_name)
 

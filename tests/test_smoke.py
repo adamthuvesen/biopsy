@@ -55,15 +55,6 @@ def test_profile_accepts_pandas_dataframe(tmp_path: Path) -> None:
     assert "days_since_last_login" in prof_df.leakage_suspects()
 
 
-def test_profile_keeps_path_keyword_compatibility(tmp_path: Path) -> None:
-    csv = write_demo_csv(tmp_path / "demo.csv", n=500)
-    prof = profile(path=csv, target="churned")
-
-    assert prof.source_name == "demo.csv"
-    assert prof.source_path == csv
-    assert prof.n_rows == 500
-
-
 def test_profile_accepts_polars_lazyframe() -> None:
     pl = pytest.importorskip("polars")
     df = pl.DataFrame(synthetic_dataframe(800)).lazy()

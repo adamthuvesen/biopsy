@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 BLOCKS = "▁▂▃▄▅▆▇█"
 
 
-def sparkline(counts: list[int], width: int | None = None) -> str:
+def sparkline(counts: Sequence[float], width: int | None = None) -> str:
     """Render a sequence of counts as a unicode sparkline.
 
     If width is given, downsample by averaging adjacent bins.
@@ -14,13 +16,13 @@ def sparkline(counts: list[int], width: int | None = None) -> str:
         return ""
     if width and len(counts) > width:
         bin_size = len(counts) / width
-        resampled = []
+        resampled: list[float] = []
         for i in range(width):
             lo = int(i * bin_size)
             hi = int((i + 1) * bin_size) or lo + 1
             chunk = counts[lo:hi] or [counts[lo]]
             resampled.append(sum(chunk) / len(chunk))
-        counts = resampled  # type: ignore[assignment]
+        counts = resampled
 
     hi_val = max(counts)
     if hi_val <= 0:

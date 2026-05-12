@@ -24,11 +24,6 @@ class Source:
     columns: list[str]
     dtypes: dict[str, str]
 
-    @property
-    def path(self) -> Path | None:
-        """Backward-compatible alias for file-backed sources."""
-        return self.source_path
-
     def sql(self, query: str) -> duckdb.DuckDBPyRelation:
         return self.con.sql(query)
 
@@ -47,12 +42,11 @@ def _scan_expr(path: Path) -> str:
 
 
 def load(
-    data: str | Path | Any | None = None,
+    data: str | Path | Any,
     sample: int | None = None,
     exclude: list[str] | None = None,
     where: list[str] | None = None,
     source_name: str | None = None,
-    path: str | Path | Any | None = None,
 ) -> Source:
     """Open a file or in-memory table as a DuckDB view named `data`.
 
@@ -64,13 +58,6 @@ def load(
     where: filter expressions, AND-ed together. See `parse_filter_expr`.
     source_name: display name for in-memory data. File paths ignore this.
     """
-    if data is None:
-        if path is None:
-            raise TypeError("load() missing required argument: 'data'")
-        data = path
-    elif path is not None:
-        raise TypeError("Pass either 'data' or 'path', not both.")
-
     con = duckdb.connect(":memory:")
     scan, resolved_path, display_name = _input_scan(con, data, source_name)
 
@@ -150,7 +137,12 @@ def _input_scan(
 
     try:
         con.register(REGISTERED_INPUT_VIEW, data)
-    except Exception as exc:
+    except (duckdb.Error, TypeError, AttributeError) as exc:
+        # DuckDB raises duckdb.Error for objects it can't introspect; pandas /
+        # polars / Arrow surface AttributeError or TypeError when their
+        # __arrow_c_stream__ / __dataframe__ protocol probe fails. Any of
+        # these means "we don't know how to read this object" — rewrap as a
+        # caller-friendly TypeError.
         raise TypeError(
             "Unsupported input for biopsy.profile(). Pass a file path or a "
             "DuckDB-registerable table such as a pandas DataFrame, Polars "
@@ -259,8 +251,7 @@ def _find_leftmost_symbolic(expr: str) -> tuple[int, str] | None:
     """Find the leftmost symbolic operator in `expr`. When two ops start at
     the same index, prefer the longer one (>= beats >, == beats =, etc.).
     Skip operators that occur inside a quoted segment."""
-    best_idx: int | None = None
-    best_op: str | None = None
+    best: tuple[int, str] | None = None
     for op in _SYMBOLIC_OPS:
         # naive scan; expr is short
         i = 0
@@ -271,14 +262,11 @@ def _find_leftmost_symbolic(expr: str) -> tuple[int, str] | None:
             if _inside_quotes(expr, idx):
                 i = idx + 1
                 continue
-            if best_idx is None or idx < best_idx or (idx == best_idx and len(op) > len(best_op)):  # type: ignore[arg-type]
-                best_idx = idx
-                best_op = op
+            if best is None or idx < best[0] or (idx == best[0] and len(op) > len(best[1])):
+                best = (idx, op)
             # Take this op's leftmost occurrence; length tie-break happens above.
             break
-    if best_idx is None or best_op is None:
-        return None
-    return best_idx, best_op
+    return best
 
 
 def _inside_quotes(expr: str, idx: int) -> bool:

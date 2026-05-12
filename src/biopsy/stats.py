@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from biopsy.io import Source, kind_of
+from biopsy.io import _quote_ident as _quote
 
 
 @dataclass
@@ -63,10 +64,6 @@ class ColumnStats:
         if not isinstance(top_count, (int, float)):
             return False  # temporal columns store (min/max, datestr) pairs here
         return top_count / (self.n - self.n_null) > 0.99
-
-
-def _quote(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 def compute_column(src: Source, name: str, hist_bins: int = 24) -> ColumnStats:

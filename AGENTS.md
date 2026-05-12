@@ -28,7 +28,7 @@ src/biopsy/
 └── templates/
     └── report.html.j2
 tests/
-└── test_smoke.py    # 16 tests covering core paths + the bugs from the v0.1 review
+└── test_smoke.py    # smoke tests covering core paths + the bugs from the v0.1 review
 ```
 
 ## Stack + conventions
@@ -58,12 +58,12 @@ tests/
 ## Run / test
 
 ```bash
-# install dev environment (uv, Python 3.12 venv)
+# install dev environment (uv, Python 3.11+ venv)
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-# run the test suite
-pytest tests/                          # 16 tests, ~40s
+# run the test suite (~17s)
+pytest tests/
 
 # CLI smoke
 biopsy demo --rows 5000                # synthetic dataset

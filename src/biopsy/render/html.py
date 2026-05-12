@@ -39,8 +39,16 @@ SEVERITY_COLOR = {"critical": CRIT, "warning": WARN, "info": ACCENT}
 
 # --- plotly template -------------------------------------------------------
 
-def _register_template() -> None:
-    pio.templates["biopsy"] = go.layout.Template(
+_TEMPLATE_NAME = "biopsy"
+
+
+def _ensure_template() -> None:
+    # Plotly stores templates in a process-global registry. Register once,
+    # lazily, only when an HTML report is actually rendered — importing this
+    # module shouldn't mutate other libraries' Plotly defaults.
+    if _TEMPLATE_NAME in pio.templates:
+        return
+    pio.templates[_TEMPLATE_NAME] = go.layout.Template(
         layout=go.Layout(
             font=dict(
                 family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
@@ -64,9 +72,6 @@ def _register_template() -> None:
             hoverlabel=dict(bgcolor="white", bordercolor=LINE, font=dict(color=INK)),
         )
     )
-
-
-_register_template()
 
 
 # --- chart builders --------------------------------------------------------
@@ -348,6 +353,7 @@ def _div(fig: go.Figure) -> str:
 # --- template binding ------------------------------------------------------
 
 def render(prof: Profile, output_path: str | Path) -> Path:
+    _ensure_template()
     output_path = Path(output_path).expanduser().resolve()
     tpl_dir = Path(__file__).parent.parent / "templates"
     env = Environment(

@@ -133,7 +133,9 @@ def mutual_info_matrix(
                     mi = mutual_info_regression(
                         X, eb, discrete_features=[da], random_state=42
                     )[0]
-            except Exception:
+            except ValueError:
+                # sklearn raises ValueError for degenerate inputs (single sample
+                # per class, all-NaN, etc.). Skip the pair rather than abort.
                 continue
             mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
             pairs[(a, b)] = mi_norm
@@ -226,7 +228,9 @@ def _pps_classification(
             )
             baseline_y = y[test_idx]
             majority_source = y[train_idx]
-    except Exception:
+    except ValueError:
+        # sklearn raises ValueError on degenerate folds (e.g., a CV split with
+        # only one class). Treat as no signal rather than failing the run.
         return 0.0
     majority = int(np.bincount(majority_source).argmax())
     naive_score = f1_score(
@@ -269,7 +273,9 @@ def _pps_regression(
             model_mae = mean_absolute_error(y[test_idx], preds)
             baseline_y = y[test_idx]
             median_source = y[train_idx]
-    except Exception:
+    except ValueError:
+        # sklearn raises ValueError on degenerate inputs (all-NaN, empty fold).
+        # Treat as no signal rather than failing the run.
         return 0.0
     naive_mae = mean_absolute_error(
         baseline_y,
@@ -298,13 +304,10 @@ def _spearman(x: np.ndarray, y: np.ndarray) -> float | None:
     inputs)."""
     if len(x) < 5 or len(y) != len(x):
         return None
-    try:
-        with warnings.catch_warnings():
-            # constant input is a valid "no signal" case; we return None below
-            warnings.simplefilter("ignore", ConstantInputWarning)
-            result = spearmanr(x, y, nan_policy="omit")
-    except Exception:
-        return None
+    with warnings.catch_warnings():
+        # constant input is a valid "no signal" case; we return None below.
+        warnings.simplefilter("ignore", ConstantInputWarning)
+        result = spearmanr(x, y, nan_policy="omit")
     rho = float(result.statistic)
     if np.isnan(rho):
         return None
@@ -315,11 +318,7 @@ def _normalized_auc(y: np.ndarray, score: np.ndarray) -> float | None:
     """AUC normalized so 0 = no signal, 1 = perfect."""
     if len(np.unique(y)) != 2:
         return None
-    try:
-        auc = roc_auc_score(y, score)
-    except Exception:
-        return None
-    return float(2 * abs(auc - 0.5))
+    return float(2 * abs(roc_auc_score(y, score) - 0.5))
 
 
 def target_signal(
@@ -395,7 +394,10 @@ def target_signal(
                 )[0]
                 pps_score = _pps_regression(X, y_sub)
                 method = "pps_regress"
-        except Exception:
+        except ValueError:
+            # sklearn raises ValueError for degenerate per-feature inputs
+            # (all-NaN after masking, single class after sampling). Skip the
+            # feature instead of aborting the whole ranking.
             continue
 
         mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
@@ -483,27 +485,30 @@ def _attach_permutation_importance(
     if X.shape[0] < 100:
         return
 
+    if target_kind == "classification":
+        if len(np.unique(y)) < 2:
+            return
+        # class_weight='balanced' helps the model attend to rare classes;
+        # AUC scoring is robust to class imbalance for binary targets.
+        model = RandomForestClassifier(
+            n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+            class_weight="balanced",
+        )
+        scoring = "roc_auc" if len(np.unique(y)) == 2 else "f1_weighted"
+    else:
+        model = RandomForestRegressor(
+            n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+        )
+        scoring = "neg_mean_absolute_error"
     try:
-        if target_kind == "classification":
-            if len(np.unique(y)) < 2:
-                return
-            # class_weight='balanced' helps the model attend to rare classes;
-            # AUC scoring is robust to class imbalance for binary targets.
-            model = RandomForestClassifier(
-                n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
-                class_weight="balanced",
-            )
-            scoring = "roc_auc" if len(np.unique(y)) == 2 else "f1_weighted"
-        else:
-            model = RandomForestRegressor(
-                n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
-            )
-            scoring = "neg_mean_absolute_error"
         model.fit(X, y)
         result = permutation_importance(
             model, X, y, n_repeats=5, random_state=42, scoring=scoring, n_jobs=-1,
         )
-    except Exception:
+    except ValueError:
+        # Degenerate inputs (e.g., scoring="roc_auc" on a fold that loses one
+        # class after permutation). Skip permutation importance for this run;
+        # PPS/MI/AUC have already been recorded per-feature.
         return
 
     importances = result.importances_mean

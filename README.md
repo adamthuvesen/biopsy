@@ -36,25 +36,15 @@ biopsy demo --rows 5000
 
 ## Install
 
-Requires Python 3.11+.
-
-```bash
-uv pip install biopsy
-```
-
-For dataframe frame helpers and in-memory pandas/polars/Arrow tests:
-
-```bash
-uv pip install "biopsy[dataframe]"
-```
-
-For local development:
+Requires Python 3.11+. Not on PyPI yet — install from source:
 
 ```bash
 git clone <repo>
 cd biopsy
 uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e .                  # CLI + library
+uv pip install -e ".[dataframe]"     # + pandas / polars / pyarrow helpers
+uv pip install -e ".[dev]"           # + test/lint tooling
 ```
 
 ## Python API

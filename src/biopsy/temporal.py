@@ -444,10 +444,12 @@ def _drift_stat(early: np.ndarray, late: np.ndarray, kind: str) -> float | None:
         try:
             early_f = np.asarray(early, dtype=np.float64)
             late_f = np.asarray(late, dtype=np.float64)
-            stat = ks_2samp(early_f, late_f, alternative="two-sided", method="auto").statistic
-            return float(stat)
-        except Exception:
+        except (TypeError, ValueError):
+            # Values declared numeric by DuckDB occasionally include Decimal /
+            # object dtypes that won't coerce — skip drift for that column.
             return None
+        stat = ks_2samp(early_f, late_f, alternative="two-sided", method="auto").statistic
+        return float(stat)
     # categorical / boolean: total variation distance on top-k frequencies
     early_str = early.astype(str)
     late_str = late.astype(str)
