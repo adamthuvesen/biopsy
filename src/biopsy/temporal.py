@@ -27,6 +27,7 @@ LEAK_GAP_THRESHOLD = 0.25          # random_pps − time_pps must exceed this
 LEAK_MIN_RANDOM_PPS = 0.35         # only flag if the feature is actually predictive
 DRIFT_KS_THRESHOLD = 0.3
 DRIFT_MIN_PPS = 0.1
+STRONG_DRIFT_KS = 0.5              # flag drift at info level even without PPS signal
 MONOTONIC_THRESHOLD = 0.95
 TARGET_DRIFT_RATIO = 2.0
 TARGET_DRIFT_BINARY_DIFF = 0.2     # 20 percentage points
@@ -377,7 +378,7 @@ def _classify(
             f"time-ordered split ({time_pps:.2f}). Likely contains future information."
         )
 
-    # Drift + non-trivial signal
+    # Drift + non-trivial predictive signal
     if (
         drift_ks is not None and drift_ks >= DRIFT_KS_THRESHOLD
         and ((random_pps or 0) >= DRIFT_MIN_PPS or (time_pps or 0) >= DRIFT_MIN_PPS)
@@ -385,6 +386,14 @@ def _classify(
         return "warning", (
             f"Distribution shifts over time (KS={drift_ks:.2f}) on a predictive feature. "
             "Production model may degrade."
+        )
+
+    # Strong drift without a PPS signal — common for regression targets where
+    # individual features score near-zero PPS but still shift seasonally/temporally.
+    if drift_ks is not None and drift_ks >= STRONG_DRIFT_KS:
+        return "info", (
+            f"Distribution shifts significantly over time (KS={drift_ks:.2f}). "
+            "May indicate seasonal patterns or concept drift."
         )
 
     # Time-monotonic + unique-per-row

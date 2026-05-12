@@ -66,8 +66,8 @@ def _header(prof: Profile) -> Panel:
 def _findings_panel(prof: Profile) -> Panel:
     table = Table.grid(padding=(0, 1), expand=True)
     table.add_column(width=2)
-    table.add_column(ratio=1)
-    table.add_column(no_wrap=False)
+    table.add_column(ratio=2)
+    table.add_column(ratio=3)
 
     shown = 0
     for f in prof.findings:

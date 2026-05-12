@@ -23,6 +23,9 @@ class Finding:
         return {"critical": 0, "warning": 1, "info": 2}[self.severity]
 
 
+_NULL_SENTINELS: frozenset[str] = frozenset({"?", "NA", "N/A", "n/a", "nan", "NaN"})
+
+
 def _looks_like_id(name: str) -> bool:
     """Heuristic: column name signals an identifier.
 
@@ -130,6 +133,23 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
                         f"Min={s.min:.4g}, max={s.max:.4g}."
                     ),
                     columns=[s.name], score=rate,
+                ))
+
+        # null sentinel encoded as a string value (e.g., "?" in CSV exports, "NA" from R)
+        if s.kind == "text" and s.top_values:
+            sentinel = next((v for v, _c in s.top_values if str(v) in _NULL_SENTINELS), None)
+            if sentinel is not None:
+                top_val, top_count = s.top_values[0]
+                is_dominant = str(top_val) in _NULL_SENTINELS
+                sev = "warning" if is_dominant else "info"
+                out.append(Finding(
+                    severity=sev, category="quality",
+                    title=f"`{s.name}` contains encoded nulls ('{sentinel}')",
+                    detail=(
+                        f"'{sentinel}' appears as a value — a common null sentinel. "
+                        "Replace with actual NULLs before profiling for correct statistics."
+                    ),
+                    columns=[s.name], score=0.85 if is_dominant else 0.6,
                 ))
 
         # high-cardinality text (modeling foot-gun)

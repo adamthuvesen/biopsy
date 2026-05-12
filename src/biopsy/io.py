@@ -96,19 +96,25 @@ def load(
         parts = [parse_filter_expr(expr, raw_dtypes) for expr in where]
         where_clause = " WHERE " + " AND ".join(f"({p})" for p in parts)
 
+    # Determine whether the source is file-backed (needs materialization) or
+    # already in-memory (pandas/polars/Arrow/DuckDB relation registered above).
+    is_file = scan != REGISTERED_INPUT_VIEW
+
     if sample:
         # CRITICAL: USING SAMPLE applies to the source *before* WHERE if they're
         # in the same SELECT, so a filtered sample collapses to ~sample × fraction
         # rows. Wrap the filtered SELECT in a subquery so the sample runs on the
         # already-filtered data.
+        ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
         con.execute(
-            f"CREATE VIEW data AS "
+            f"{ddl} data AS "
             f"SELECT * FROM (SELECT {select_clause} FROM {scan}{where_clause}) "
             f"USING SAMPLE {sample} ROWS (reservoir, 42)"
         )
     else:
+        ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
         con.execute(
-            f"CREATE VIEW data AS SELECT {select_clause} FROM {scan}{where_clause}"
+            f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}"
         )
 
     info = con.execute("DESCRIBE data").fetchall()
