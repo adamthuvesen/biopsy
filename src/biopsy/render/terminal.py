@@ -41,6 +41,9 @@ def render(
     console.print(_header(prof))
     if prof.findings:
         console.print(_findings_panel(prof))
+    plan = prof.action_plan()
+    if _action_plan_has_content(plan):
+        console.print(_action_plan_panel(prof, plan, all_columns=all_columns))
     if prof.target_signals:
         console.print(_target_panel(prof))
     if prof.temporal is not None and prof.temporal.signals:
@@ -229,15 +232,19 @@ def _target_panel(prof: Profile) -> Panel:
     t.add_column("auc lift", justify="right")
     t.add_column("rel perm", justify="right")
     t.add_column("n", justify="right")
+    t.add_column("conf", style="dim")
     t.add_column("bar")
     t.add_column("note", style="dim")
 
+    conf_color = {"low": "red", "medium": "yellow", "high": "green"}
     for s in prof.target_signals[:15]:
         bar_width = 20
         filled = int(s.score * bar_width)
         bar_color = "red" if s.is_leak_suspect else "green"
         bar = f"[{bar_color}]" + "█" * filled + "[/]" + "·" * (bar_width - filled)
         note = "[red]leakage suspect[/red]" if s.is_leak_suspect else s.method
+        conf = s.confidence
+        conf_disp = f"[{conf_color[conf]}]{conf}[/{conf_color[conf]}]"
         t.add_row(
             s.feature,
             f"{s.score:.2f}",
@@ -247,6 +254,7 @@ def _target_panel(prof: Profile) -> Panel:
             _fmt_unsigned(s.auc),
             _fmt_unsigned(s.perm_importance),
             f"{s.support:,}" if s.support else "—",
+            conf_disp,
             bar,
             note,
         )
@@ -394,6 +402,72 @@ def _correlations_panel(prof: Profile) -> Panel:
     return Panel(
         t,
         title="[bold]Top correlations[/bold]",
+        border_style="bright_black",
+        padding=(0, 1),
+    )
+
+
+def _action_plan_has_content(plan) -> bool:
+    return bool(
+        plan.drop or plan.transform or plan.impute or plan.encode or plan.review
+        or plan.split or plan.cv or plan.class_strategy
+    )
+
+
+def _action_plan_panel(prof: Profile, plan, *, all_columns: bool) -> Panel:
+    limit = None if all_columns else 6
+
+    def _table(title: str, items, mark_style: str) -> Table | None:
+        if not items:
+            return None
+        t = Table(
+            show_header=True, header_style="bold", border_style="bright_black", expand=True,
+        )
+        t.add_column(title, style="cyan", no_wrap=True)
+        t.add_column("action", style=mark_style)
+        t.add_column("reason", overflow="fold")
+        shown = items if limit is None else items[:limit]
+        for item in shown:
+            t.add_row(item.column, item.action, item.reason)
+        if limit is not None and len(items) > limit:
+            t.add_row("…", "", f"+{len(items) - limit} more")
+        return t
+
+    panels: list[Table | Text] = []
+    for title, items, style in (
+        ("drop", plan.drop, "red"),
+        ("transform", plan.transform, "yellow"),
+        ("impute", plan.impute, "cyan"),
+        ("encode", plan.encode, "magenta"),
+        ("review", plan.review, "yellow"),
+    ):
+        tbl = _table(title, items, style)
+        if tbl is not None:
+            panels.append(tbl)
+
+    extras = Text()
+    if plan.split is not None:
+        extras.append("split   ", style="dim")
+        extras.append(plan.split.kind, style="bold")
+        extras.append(f" — {plan.split.detail}\n", style="dim")
+    if plan.cv is not None:
+        extras.append("cv      ", style="dim")
+        extras.append(plan.cv.kind, style="bold")
+        extras.append(f" — {plan.cv.detail}\n", style="dim")
+    if plan.class_strategy is not None:
+        extras.append("class   ", style="dim")
+        extras.append(plan.class_strategy.kind, style="bold")
+        extras.append(f" — {plan.class_strategy.detail}\n", style="dim")
+    if extras.plain:
+        panels.append(extras)
+
+    if not panels:
+        panels.append(Text("— nothing to act on.", style="dim italic"))
+
+    target_chip = f" → [yellow]{prof.target}[/yellow]" if prof.target else ""
+    return Panel(
+        Group(*panels),
+        title=f"[bold]Action plan{target_chip}[/bold]",
         border_style="bright_black",
         padding=(0, 1),
     )

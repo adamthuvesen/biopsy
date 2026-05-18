@@ -933,7 +933,7 @@
             <li>
               <span class="mark">×</span>
               <div>
-                <span class="name">{{ a.name }}</span>
+                <span class="name">{{ a.column }}</span>
                 <div class="reason">{{ a.reason }}</div>
               </div>
             </li>
@@ -956,7 +956,7 @@
             <li>
               <span class="mark">?</span>
               <div>
-                <span class="name">{{ a.name }}</span>
+                <span class="name">{{ a.column }}</span>
                 <div class="reason">{{ a.reason }}</div>
               </div>
             </li>
@@ -979,7 +979,7 @@
             <li>
               <span class="mark">~</span>
               <div>
-                <span class="name">{{ a.name }}</span>
+                <span class="name">{{ a.column }}</span>
                 <div class="reason">{{ a.reason }}</div>
               </div>
             </li>
@@ -1143,6 +1143,80 @@
           </table>
         </div>
       </details>
+    </section>
+    {% endif %}
+
+    {# ----- Feature drilldown ----------------------------------------- #}
+    {% if drilldown_cards %}
+    <section id="drilldown">
+      <div class="section-head">
+        <h2>Feature <em>drilldown</em></h2>
+        <div class="meta">{{ drilldown_cards|length }} cards · top of shortlist</div>
+      </div>
+      <p class="section-intro">
+        One card per shortlisted feature — distribution, target signal,
+        and the strongest correlations. Click a row to expand.
+      </p>
+      <div class="drilldown">
+      {% for card in drilldown_cards %}
+        <details class="feature-card panel">
+          <summary>
+            <h3 style="display:inline; font-weight:600;">
+              <code>{{ card.entry.feature }}</code>
+            </h3>
+            <span style="color:var(--ink-3); margin-left: 12px;">
+              cluster c{{ card.entry.cluster_id }} ·
+              score {{ "%.2f"|format(card.entry.score) }}
+              {% if card.entry.score_method %}({{ card.entry.score_method }}){% endif %}
+              {% if card.signal and card.signal.confidence %}
+                · conf {{ card.signal.confidence }}
+              {% endif %}
+            </span>
+          </summary>
+          <div style="display:grid;
+                      grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+                      gap:24px; align-items:flex-start; padding-top:12px;">
+            <div style="min-width:0; overflow:hidden;">{{ card.chart|safe }}</div>
+            <div style="font-size:0.88rem; min-width:0;">
+              <table>
+                <tr><th>type</th><td>{{ card.stats.kind }}</td></tr>
+                <tr><th>null</th>
+                    <td>{{ "%.1f%%"|format(100 * card.stats.null_rate) }}</td></tr>
+                <tr><th>unique</th><td>{{ card.stats.n_unique|commafy }}</td></tr>
+                {% if card.signal %}
+                <tr><th>pps</th><td>{{ "%.2f"|format(card.signal.score) }}</td></tr>
+                <tr><th>mi</th><td>{{ "%.2f"|format(card.signal.mutual_info) }}</td></tr>
+                {% if card.signal.raw_auc is not none %}
+                <tr><th>auc</th><td>{{ "%.2f"|format(card.signal.raw_auc) }}</td></tr>
+                {% endif %}
+                {% if card.signal.support %}
+                <tr><th>support</th><td>{{ card.signal.support|commafy }}</td></tr>
+                {% endif %}
+                {% endif %}
+              </table>
+              {% if card.top_corrs %}
+              <div style="margin-top:12px;">
+                <strong>Top correlations</strong>
+                <ul style="margin:6px 0; padding-left:18px; font-size:0.85rem;">
+                {% for p in card.top_corrs %}
+                  <li>
+                    {% if p.a == card.entry.feature %}
+                      <code>{{ p.b }}</code>
+                    {% else %}
+                      <code>{{ p.a }}</code>
+                    {% endif %}
+                    · {% if p.pearson is not none %}r = {{ "%+.2f"|format(p.pearson) }}{% endif %}
+                    {% if p.mutual_info is not none %} · MI = {{ "%.2f"|format(p.mutual_info) }}{% endif %}
+                  </li>
+                {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </details>
+      {% endfor %}
+      </div>
     </section>
     {% endif %}
 

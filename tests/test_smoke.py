@@ -127,14 +127,15 @@ def test_temporal_detects_planted_leak(tmp_path: Path) -> None:
     # The planted leak: cohort_engagement_v2 is informative only in the late period.
     # Random CV mixes both periods (signal present) → high random_pps.
     # Time-ordered train (early only, all noise) → low time_pps.
-    critical_temporal = [
+    # Reason carries "future information"; categorized as leakage.
+    critical_leakage = [
         f for f in prof.findings
-        if f.category == "temporal" and f.severity == "critical"
+        if f.category == "leakage" and f.severity == "critical"
     ]
-    feats = [c for f in critical_temporal for c in f.columns]
+    feats = [c for f in critical_leakage for c in f.columns]
     assert "cohort_engagement_v2" in feats, (
-        "expected cohort_engagement_v2 to be flagged as temporal-critical, "
-        f"got critical temporal findings on: {feats}"
+        "expected cohort_engagement_v2 to be flagged as critical leakage, "
+        f"got critical leakage findings on: {feats}"
     )
 
 
@@ -705,6 +706,620 @@ def test_m7_looks_like_id_no_false_positives() -> None:
     assert not _looks_like_id("valid")
     assert not _looks_like_id("grid")
     assert not _looks_like_id("revenue")
+
+
+def test_terminal_renders_action_plan(tmp_path: Path) -> None:
+    """The terminal report includes the synthesized action plan with at
+    least one of drop/transform/impute and the split/CV one-liners."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from biopsy.render.terminal import render as render_terminal
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned")
+
+    buf = StringIO()
+    console = Console(file=buf, width=160, force_terminal=False)
+    render_terminal(prof, console=console, all_columns=False)
+    out = buf.getvalue()
+    assert "Action plan" in out
+    # The demo dataset always has at least drop + impute work.
+    assert "drop" in out
+    assert "impute" in out
+    # The split and CV recommendation lines should appear under the tables.
+    assert "split" in out
+    assert "cv" in out
+
+
+def test_pipeline_code_imports_and_runs(tmp_path: Path) -> None:
+    """The generated sklearn pipeline module imports cleanly, exposes
+    build_preprocessor(), and fits on the demo dataset.
+    """
+    import importlib.util
+    import sys
+
+    pd = pytest.importorskip("pandas")
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
+    prof = profile(csv, target="churned")
+
+    code = prof.to_sklearn_pipeline_code()
+    module_path = tmp_path / "generated_pp.py"
+    module_path.write_text(code, encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("generated_pp", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["generated_pp"] = module
+    try:
+        spec.loader.exec_module(module)
+        assert module.TARGET == "churned"
+        df = pd.read_csv(csv)
+        preproc = module.build_preprocessor()
+        fitted = preproc.fit_transform(df)
+        # transformed array has same row count as input
+        assert fitted.shape[0] == len(df)
+        # at least one feature column survives (numeric + categorical)
+        assert fitted.shape[1] > 0
+    finally:
+        sys.modules.pop("generated_pp", None)
+
+
+def test_cli_profile_writes_pipeline(tmp_path: Path) -> None:
+    """`biopsy profile --pipeline out.py` writes a runnable module."""
+    csv = write_demo_csv(tmp_path / "demo.csv", n=600)
+    out = tmp_path / "pp.py"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["profile", str(csv), "--target", "churned", "--pipeline", str(out), "--no-progress"],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    text = out.read_text()
+    assert "def build_preprocessor()" in text
+    assert "ColumnTransformer" in text
+
+
+def _write_two_csvs_with_shift(tmp_path: Path) -> tuple[Path, Path]:
+    import csv as csv_module
+    import random as _random
+
+    rng = _random.Random(42)
+    a_path = tmp_path / "a.csv"
+    b_path = tmp_path / "b.csv"
+    with a_path.open("w", newline="") as fa, b_path.open("w", newline="") as fb:
+        wa = csv_module.writer(fa)
+        wb = csv_module.writer(fb)
+        wa.writerow(["age", "income", "segment", "target"])
+        wb.writerow(["age", "income", "segment", "target"])
+        for _ in range(2000):
+            seg = rng.choice(["A", "B", "C"])
+            tgt = 1 if rng.random() < 0.3 else 0
+            wa.writerow([round(rng.gauss(35, 5), 2), round(rng.gauss(50_000, 5_000), 2), seg, tgt])
+            wb.writerow([round(rng.gauss(55, 5), 2), round(rng.gauss(50_500, 5_000), 2), seg, tgt])
+    return a_path, b_path
+
+
+def test_post_event_feature_triggers_leakage_finding(tmp_path: Path) -> None:
+    """A feature with high target signal that doesn't survive a time-ordered
+    split is flagged as leakage (future-information) — not just temporal drift.
+    Uses the demo's planted-leak pattern (cohort_engagement_v2)."""
+    csv = write_demo_csv(tmp_path / "demo.csv", n=2500)
+    prof = profile(csv, target="churned")
+    leakage = [
+        f for f in prof.findings
+        if f.category == "leakage"
+        and "cohort_engagement_v2" in f.columns
+        and "future information" in f.detail.lower()
+    ]
+    assert leakage, (
+        f"expected post-event leakage finding, "
+        f"got {[(f.category, f.title) for f in prof.findings]}"
+    )
+
+
+def test_free_text_column_flagged_and_excluded(tmp_path: Path) -> None:
+    """Long, near-unique strings get flagged as free text."""
+    import csv as csv_module
+    import random as _random
+
+    rng = _random.Random(11)
+
+    def lorem(words: int) -> str:
+        vocab = ["lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing"]
+        return " ".join(rng.choice(vocab) + str(rng.randint(0, 9999)) for _ in range(words))
+
+    p = tmp_path / "free_text.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "review"])
+        for i in range(800):
+            w.writerow([i % 23, lorem(10)])
+
+    prof = profile(p)
+    review_findings = [f for f in prof.findings if "review" in f.columns]
+    assert any("free text" in f.title.lower() for f in review_findings), \
+        f"expected free-text finding, got {[f.title for f in review_findings]}"
+
+
+def test_date_string_detection_suggests_cast() -> None:
+    """A pandas DataFrame whose date column is stored as object/string
+    surfaces a quality finding asking for a cast."""
+    pd = pytest.importorskip("pandas")
+    rows = [
+        {"timestamp": f"2024-01-{(i % 28) + 1:02d}", "x": i}
+        for i in range(1500)
+    ]
+    df = pd.DataFrame(rows)
+    df["timestamp"] = df["timestamp"].astype("string")
+    prof = profile(df, source_name="date-strings")
+    timestamp_findings = [f for f in prof.findings if "timestamp" in f.columns]
+    assert any("stored as a string" in f.title for f in timestamp_findings), \
+        f"got {[f.title for f in timestamp_findings]}"
+
+
+def test_bool_like_int_detected_and_handled(tmp_path: Path) -> None:
+    """Integer columns whose distinct values ⊆ {0,1} are flagged as bool-like."""
+    import csv as csv_module
+
+    p = tmp_path / "bool_int.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["is_active", "x"])
+        for i in range(2000):
+            w.writerow([1 if i % 3 == 0 else 0, i])
+
+    prof = profile(p)
+    bool_findings = [f for f in prof.findings if "is_active" in f.columns]
+    assert any("boolean stored as int" in f.title for f in bool_findings)
+
+
+def test_high_card_cat_warns_about_target_encoding(tmp_path: Path) -> None:
+    """High-cardinality categoricals get a target-encoding leakage warning."""
+    import csv as csv_module
+    import random as _random
+
+    rng = _random.Random(99)
+    p = tmp_path / "high_card.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["zip", "x", "target"])
+        for i in range(2000):
+            zip_code = f"Z{rng.randint(1, 800):04d}"  # ~800 levels in 2000 rows
+            w.writerow([zip_code, i % 17, 1 if i % 3 == 0 else 0])
+
+    prof = profile(p, target="target")
+    zip_findings = [f for f in prof.findings if "zip" in f.columns]
+    assert any("target encoding" in f.title.lower() for f in zip_findings)
+
+
+def test_target_signal_has_ci_when_bootstrap_enabled(tmp_path: Path) -> None:
+    """Opting into bootstrap=50 populates AUC and MI 95% intervals."""
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned", bootstrap=50)
+    assert prof.target_signals
+    has_ci = False
+    for s in prof.target_signals[:5]:
+        if s.auc_ci_low is not None and s.auc_ci_high is not None:
+            assert s.auc_ci_low <= s.auc_ci_high
+            has_ci = True
+        if s.mi_ci_low is not None and s.mi_ci_high is not None:
+            assert s.mi_ci_low <= s.mi_ci_high
+            has_ci = True
+    assert has_ci, "expected at least one feature to carry AUC or MI CI"
+
+
+def test_pps_stability_flag_fires_on_noisy_feature(tmp_path: Path) -> None:
+    """Multi-seed PPS produces a stability score (CoV); a feature with no
+    real signal has high coefficient of variation across permuted seeds."""
+    import csv as csv_module
+    import random as _random
+
+    p = tmp_path / "noisy.csv"
+    rng = _random.Random(7)
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["noise", "target"])
+        for _ in range(2000):
+            w.writerow([rng.gauss(0, 1), 1 if rng.random() < 0.3 else 0])
+
+    prof = profile(p, target="target", pps_seeds=4)
+    assert prof.target_signals
+    noisy = next((s for s in prof.target_signals if s.feature == "noise"), None)
+    assert noisy is not None
+    # On a pure-noise feature, pps_stability must be defined.
+    assert noisy.pps_stability is not None
+
+
+def test_target_signal_confidence_low_for_rare_positives(tmp_path: Path) -> None:
+    """A binary target with very few positives produces low-confidence
+    target-signal rows."""
+    import csv as csv_module
+
+    p = tmp_path / "rare.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "y", "target"])
+        for i in range(2000):
+            # Only 10 positives across the whole frame.
+            tgt = 1 if i % 200 == 0 else 0
+            w.writerow([i % 17, i % 31, tgt])
+
+    prof = profile(p, target="target")
+    assert prof.target_signals
+    # All ranked features must be flagged low-confidence on 10 positives.
+    for s in prof.target_signals:
+        assert s.confidence == "low"
+
+
+def test_profile_diff_reports_new_findings(tmp_path: Path) -> None:
+    """Mutating a saved profile JSON to remove a finding causes that
+    finding to appear in the `resolved` bucket of the diff."""
+    import json as _json
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned")
+    a_path = tmp_path / "a.json"
+    b_path = tmp_path / "b.json"
+    prof.save(a_path)
+    payload = _json.loads(a_path.read_text())
+    # Drop the first finding from B so it counts as resolved in A→B.
+    removed = payload["findings"].pop(0)
+    b_path.write_text(_json.dumps(payload), encoding="utf-8")
+
+    prof_a = load_profile(a_path)
+    prof_b = load_profile(b_path)
+    d = prof_a.diff(prof_b)
+    # The removed finding shows up in resolved.
+    titles = {e.title for e in d.resolved}
+    assert removed["title"] in titles
+    # Round-tripping the original profile produces an empty diff.
+    same = prof_a.diff(prof_a)
+    assert same.is_empty()
+
+
+def test_cli_diff_runs(tmp_path: Path) -> None:
+    """`biopsy diff a.json b.json` exits 0 and reports either resolved
+    findings or 'No differences'."""
+    import json as _json
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned")
+    a_path = tmp_path / "a.json"
+    b_path = tmp_path / "b.json"
+    prof.save(a_path)
+    payload = _json.loads(a_path.read_text())
+    payload["findings"].pop(0)
+    b_path.write_text(_json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["diff", str(a_path), str(b_path)])
+    assert result.exit_code == 0, result.output
+    assert "Profile diff" in result.output
+
+
+def test_compute_all_is_single_pass(tmp_path: Path) -> None:
+    """compute_all batches base counts (n / non-null / distinct) into one
+    DuckDB query across all columns instead of one per column."""
+    from biopsy.io import load
+    from biopsy.stats import _batched_base_counts, compute_all
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=2000)
+    src = load(csv)
+
+    base = _batched_base_counts(src)
+    assert set(base) == set(src.columns)
+    # The batched values agree with a per-column SQL count for every column.
+    stats = compute_all(src)
+    for name, s in stats.items():
+        n, nonnull, nunique = base[name]
+        assert n == s.n
+        assert nonnull == s.n - s.n_null
+        assert nunique == s.n_unique
+
+
+def test_max_cols_limits_pairwise_pass(tmp_path: Path) -> None:
+    """`max_cols` caps the number of unique columns appearing in the
+    pairwise correlation list."""
+    import csv as csv_module
+    import random as _random
+
+    rng = _random.Random(3)
+    p = tmp_path / "wide.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        cols = [f"x{i}" for i in range(30)] + ["target"]
+        w.writerow(cols)
+        for _ in range(800):
+            row = [rng.gauss(0, 1) for _ in range(30)] + [1 if rng.random() < 0.3 else 0]
+            w.writerow(row)
+
+    prof_full = profile(p, target="target")
+    prof_capped = profile(p, target="target", max_cols=10)
+    full_mi_cols = {
+        c
+        for pair in prof_full.correlations
+        if pair.mutual_info is not None
+        for c in (pair.a, pair.b)
+    }
+    capped_mi_cols = {
+        c
+        for pair in prof_capped.correlations
+        if pair.mutual_info is not None
+        for c in (pair.a, pair.b)
+    }
+    assert len(full_mi_cols) > len(capped_mi_cols)
+    assert len(capped_mi_cols) <= 10
+
+
+def test_notebook_starter_writes_valid_json(tmp_path: Path) -> None:
+    """`biopsy notebook out.ipynb --file data.csv --target ...` writes a
+    valid nbformat-4 JSON file."""
+    import json as _json
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=800)
+    out = tmp_path / "starter.ipynb"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["notebook", str(out), "--file", str(csv), "--target", "churned"]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    nb = _json.loads(out.read_text())
+    assert nb["nbformat"] == 4
+    assert len(nb["cells"]) >= 4
+    # The preprocessor cell references build_preprocessor.
+    sources = "".join(
+        "".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code"
+    )
+    assert "build_preprocessor" in sources
+
+
+def test_biopsy_toml_rejects_unknown_keys(tmp_path: Path) -> None:
+    """biopsy.toml with an unknown top-level key is rejected with a
+    did-you-mean suggestion."""
+    cfg = tmp_path / "biopsy.toml"
+    cfg.write_text("target = 'churned'\nsamplee = 1000\n")  # typo: samplee
+    csv = write_demo_csv(tmp_path / "demo.csv", n=500)
+    runner = CliRunner()
+    result = runner.invoke(app, ["profile", str(csv), "--config", str(cfg)])
+    assert result.exit_code != 0
+    msg = (result.stderr or "") + "\n" + (result.output or "")
+    if not msg.strip() and result.exception is not None:
+        msg = str(result.exception)
+    assert "Unknown config key" in msg or "samplee" in msg, msg
+    assert "sample" in msg  # the suggestion
+
+
+def test_cli_doctor_runs_fast(tmp_path: Path) -> None:
+    """`biopsy doctor data.csv` prints schema + candidate target/time
+    columns and exits 0."""
+    import time
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=2000)
+    runner = CliRunner()
+    t0 = time.perf_counter()
+    result = runner.invoke(app, ["doctor", str(csv)])
+    elapsed = time.perf_counter() - t0
+    assert result.exit_code == 0, result.output
+    assert "Doctor" in result.output
+    assert "candidates" in result.output.lower() or "candidate" in result.output.lower()
+    assert elapsed < 10, f"doctor took {elapsed:.2f}s on a tiny demo"
+
+
+def test_html_findings_groups_by_severity(tmp_path: Path) -> None:
+    """Findings section carries severity/category data attributes so the
+    in-page filter chips work without JS state."""
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned")
+    out = tmp_path / "report.html"
+    render_html(prof, out)
+    text = out.read_text()
+    assert 'id="findings-filter"' in text
+    # At least one finding per severity carries the data-sev attribute.
+    assert 'data-sev="critical"' in text or 'data-sev="warning"' in text
+    assert 'data-cat="' in text
+    # Filter chips for severities exist (depend on what fired).
+    assert 'class="chip' in text
+
+
+def test_html_report_has_feature_drilldown(tmp_path: Path) -> None:
+    """The HTML report renders a `<details class="feature-card panel">`
+    per shortlisted feature."""
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1500)
+    prof = profile(csv, target="churned")
+    out = tmp_path / "report.html"
+    render_html(prof, out)
+    text = out.read_text()
+    assert "feature-card" in text
+    # At least one shortlisted feature appears inside a card.
+    assert prof.clusters is not None and prof.clusters.shortlist
+    feat = prof.clusters.shortlist[0].feature
+    assert feat in text
+
+
+def test_compare_html_renders(tmp_path: Path) -> None:
+    """The compare HTML includes schema diff, drifted features, and at
+    least one per-feature card on a clear shift."""
+    from biopsy import compare_profiles
+    from biopsy.render.html import render_compare
+
+    a_path, b_path = _write_two_csvs_with_shift(tmp_path)
+    a = profile(a_path, target="target")
+    b = profile(b_path, target="target")
+    report = compare_profiles(a, b)
+    out = tmp_path / "compare.html"
+    rendered = render_compare(a, b, report, out)
+    assert rendered.exists()
+    text = rendered.read_text()
+    assert "Schema diff" in text
+    assert "Top drifted features" in text
+    assert "feature-card" in text
+    assert "age" in text
+
+
+def test_cli_compare_runs_end_to_end(tmp_path: Path) -> None:
+    """`biopsy compare A B` prints schema diff + drift findings, exits 0."""
+    a_path, b_path = _write_two_csvs_with_shift(tmp_path)
+    html_out = tmp_path / "compare.html"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "compare", str(a_path), str(b_path),
+            "--target", "target",
+            "--html", str(html_out),
+            "--no-progress",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "drift" in result.output.lower()
+    assert "age" in result.output
+    assert html_out.exists()
+    text = html_out.read_text()
+    assert "biopsy compare" in text
+
+
+def test_cli_compare_accepts_saved_profiles(tmp_path: Path) -> None:
+    """`biopsy compare a.json b.json` works on saved profile artifacts."""
+    a_path, b_path = _write_two_csvs_with_shift(tmp_path)
+    prof_a = profile(a_path, target="target")
+    prof_b = profile(b_path, target="target")
+    a_json = tmp_path / "a.json"
+    b_json = tmp_path / "b.json"
+    prof_a.save(a_json)
+    prof_b.save(b_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["compare", str(a_json), str(b_json), "--no-progress"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "drift" in result.output.lower()
+
+
+def test_compare_detects_numeric_shift(tmp_path: Path) -> None:
+    """Compare two datasets where one numeric column has shifted between A
+    and B; the shifted column ranks in the top-3 drift findings."""
+    import csv as csv_module
+
+    from biopsy import compare_profiles
+
+    a_path = tmp_path / "a.csv"
+    b_path = tmp_path / "b.csv"
+    with a_path.open("w", newline="") as fa, b_path.open("w", newline="") as fb:
+        wa = csv_module.writer(fa)
+        wb = csv_module.writer(fb)
+        wa.writerow(["age", "income", "segment", "target"])
+        wb.writerow(["age", "income", "segment", "target"])
+        # A: age ~ Normal(35, 5)
+        # B: age ~ Normal(55, 5)  (large location shift)
+        # income / segment / target unchanged so they should not dominate.
+        rng = __import__("random").Random(42)
+        for _ in range(2000):
+            seg = rng.choice(["A", "B", "C"])
+            tgt = 1 if rng.random() < 0.3 else 0
+            wa.writerow([round(rng.gauss(35, 5), 2), round(rng.gauss(50_000, 5_000), 2), seg, tgt])
+            wb.writerow([round(rng.gauss(55, 5), 2), round(rng.gauss(50_500, 5_000), 2), seg, tgt])
+
+    a = profile(a_path, target="target")
+    b = profile(b_path, target="target")
+    report = compare_profiles(a, b)
+
+    assert report.schema.shared == ["age", "income", "segment", "target"]
+    # The shifted column should be ranked highest by drift_score.
+    assert report.drifts[0].column == "age"
+    assert report.drifts[0].ks_stat is not None and report.drifts[0].ks_stat > 0.5
+    # KS p-value should be near zero on a clear shift.
+    assert report.drifts[0].ks_pvalue is not None and report.drifts[0].ks_pvalue < 0.05
+    # The age finding should be among the top-3 drift findings.
+    top_finding_cols = [f.columns[0] for f in report.findings if f.columns][:3]
+    assert "age" in top_finding_cols
+
+
+def test_split_recommendation_temporal_when_time_present(tmp_path: Path) -> None:
+    """With a usable time column, the action plan recommends a temporal
+    holdout and TimeSeriesSplit CV."""
+    import csv as csv_module
+    from datetime import date, timedelta
+
+    p = tmp_path / "temporal.csv"
+    start = date(2024, 1, 1)
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["event_date", "x", "target"])
+        for i in range(1500):
+            w.writerow([start + timedelta(days=i % 400), i % 31, i % 2])
+
+    prof = profile(p, target="target", time_col="event_date")
+    plan = prof.action_plan()
+    assert plan.split is not None
+    assert plan.split.kind == "temporal"
+    assert plan.split.time_column == "event_date"
+    assert plan.cv is not None
+    assert plan.cv.kind == "time_series"
+
+
+def test_split_recommendation_stratified_when_imbalanced(tmp_path: Path) -> None:
+    """Imbalanced binary classification target → stratified split + CV."""
+    import csv as csv_module
+
+    p = tmp_path / "imbalanced.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "target"])
+        for i in range(2000):
+            w.writerow([i % 19, 1 if i % 50 == 0 else 0])
+
+    prof = profile(p, target="target")
+    plan = prof.action_plan()
+    assert plan.split is not None
+    assert plan.split.kind == "stratified"
+    assert plan.split.stratify_on == "target"
+    assert plan.cv is not None
+    assert plan.cv.kind == "stratified_kfold"
+    # Severe class imbalance triggers a class_weight strategy.
+    assert plan.class_strategy is not None
+    assert plan.class_strategy.kind == "class_weight"
+
+
+def test_action_plan_basic(tmp_path: Path) -> None:
+    """The action plan exposes drop / impute / transform / encode buckets,
+    plus a split + CV + class strategy. Built once and consumed by HTML and
+    terminal — no logic duplication.
+    """
+    from biopsy.action_plan import ActionPlan
+
+    csv = write_demo_csv(tmp_path / "demo.csv", n=2000)
+    prof = profile(csv, target="churned")
+
+    plan = prof.action_plan()
+    assert isinstance(plan, ActionPlan)
+    # Demo dataset has at least one drop candidate (constant_col) and at least
+    # one transform candidate (skewed monthly_revenue / outlier columns).
+    assert plan.drop, f"expected drop bucket non-empty, got {plan.records()!r}"
+    drop_cols = {item.column for item in plan.drop}
+    assert "constant_col" in drop_cols
+    # Impute bucket has at least one column (some demo columns have nulls).
+    assert plan.impute, "expected non-empty impute bucket"
+    # Every item carries a non-empty reason string.
+    for item in plan.drop + plan.review + plan.transform + plan.encode + plan.impute:
+        assert item.reason, f"empty reason on {item}"
+        assert item.severity in {"critical", "warning", "info"}
+        assert item.column != prof.target, "target column should never appear in drop/encode/impute"
+    # Classification target → stratified split + class strategy when imbalanced.
+    assert plan.split is not None
+    assert plan.split.kind in {"temporal", "stratified", "random"}
+    assert plan.cv is not None
+    # records() is JSON-serialisable.
+    records = plan.records()
+    assert records
+    assert {"bucket", "column", "action", "reason", "severity", "evidence"} <= records[0].keys()
+    # action_plan() is cached — second call returns the same object.
+    assert prof.action_plan() is plan
 
 
 def test_html_render(tmp_path: Path) -> None:

@@ -66,15 +66,24 @@ class ColumnStats:
         return top_count / (self.n - self.n_null) > 0.99
 
 
-def compute_column(src: Source, name: str, hist_bins: int = 24) -> ColumnStats:
+def compute_column(
+    src: Source,
+    name: str,
+    hist_bins: int = 24,
+    *,
+    _base_counts: tuple[int, int, int] | None = None,
+) -> ColumnStats:
     col = _quote(name)
     dtype = src.dtypes[name]
     kind = kind_of(dtype)
 
-    base = src.con.execute(
-        f"SELECT COUNT(*), COUNT({col}), COUNT(DISTINCT {col}) FROM data"
-    ).fetchone()
-    n, n_nonnull, n_unique = base
+    if _base_counts is not None:
+        n, n_nonnull, n_unique = _base_counts
+    else:
+        base = src.con.execute(
+            f"SELECT COUNT(*), COUNT({col}), COUNT(DISTINCT {col}) FROM data"
+        ).fetchone()
+        n, n_nonnull, n_unique = base
     n_null = n - n_nonnull
 
     stats = ColumnStats(
@@ -215,4 +224,35 @@ def _numeric_histogram(src: Source, name: str, bins: int) -> list[tuple[float, f
 
 
 def compute_all(src: Source, hist_bins: int = 24) -> dict[str, ColumnStats]:
-    return {name: compute_column(src, name, hist_bins) for name in src.columns}
+    """Compute per-column stats.
+
+    The base counts (COUNT(*), COUNT(col), COUNT(DISTINCT col)) are batched
+    into a single DuckDB query across all columns, then the per-column
+    enrichments (numeric aggregates, histograms, top values) follow.
+    """
+    base_counts = _batched_base_counts(src)
+    out: dict[str, ColumnStats] = {}
+    for name in src.columns:
+        out[name] = compute_column(src, name, hist_bins, _base_counts=base_counts.get(name))
+    return out
+
+
+def _batched_base_counts(src: Source) -> dict[str, tuple[int, int, int]]:
+    """One SQL pass for `COUNT(*), COUNT(col), COUNT(DISTINCT col)` over
+    every column. Returns `{column: (n, n_nonnull, n_unique)}`.
+    """
+    if not src.columns:
+        return {}
+    selects = ["COUNT(*)"]
+    for c in src.columns:
+        q = _quote(c)
+        selects.append(f"COUNT({q})")
+        selects.append(f"COUNT(DISTINCT {q})")
+    row = src.con.execute(f"SELECT {', '.join(selects)} FROM data").fetchone()
+    n = int(row[0])
+    out: dict[str, tuple[int, int, int]] = {}
+    for i, col in enumerate(src.columns):
+        nonnull = int(row[1 + 2 * i])
+        nunique = int(row[2 + 2 * i])
+        out[col] = (n, nonnull, nunique)
+    return out

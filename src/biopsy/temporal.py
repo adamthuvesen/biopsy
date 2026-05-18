@@ -401,6 +401,23 @@ def _classify(
             f"time-ordered split ({time_pps:.2f}). Likely contains future information."
         )
 
+    # Post-event leakage: target signal is present in only part of the time
+    # range. Lower random_pps threshold catches features that pop in late, are
+    # computed from future events, and don't generalize across time.
+    if (
+        random_pps is not None and time_pps is not None
+        and random_pps >= 0.30
+        and time_pps < 0.05
+        and (random_pps - time_pps) >= 0.25
+        and drift_ks is not None and drift_ks >= 0.15
+    ):
+        return "critical", (
+            f"Random-CV predictive signal ({random_pps:.2f}) but time-ordered "
+            f"split scores near zero ({time_pps:.2f}) with strong drift "
+            f"(KS={drift_ks:.2f}). Likely contains future information from "
+            "post-event values."
+        )
+
     # Drift + non-trivial predictive signal
     if (
         drift_ks is not None and drift_ks >= DRIFT_KS_THRESHOLD

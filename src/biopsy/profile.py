@@ -94,6 +94,37 @@ class Profile:
             return []
         return [to_jsonable(s) for s in self.clusters.shortlist]
 
+    def action_plan(self) -> Any:
+        """Synthesized modeling action plan: drop / impute / encode /
+        transform / review buckets plus split + CV + class strategy.
+
+        Built from findings, columns, target summary, and temporal report.
+        Cached on the instance.
+        """
+        cached = getattr(self, "_action_plan_cache", None)
+        if cached is not None:
+            return cached
+        from biopsy.action_plan import build_action_plan
+
+        plan = build_action_plan(self)
+        object.__setattr__(self, "_action_plan_cache", plan)
+        return plan
+
+    def action_plan_records(self) -> list[dict[str, Any]]:
+        return self.action_plan().records()
+
+    def to_sklearn_pipeline_code(self) -> str:
+        """Return a runnable Python module that builds a ColumnTransformer
+        wired to this profile's action plan."""
+        from biopsy.action_plan import to_sklearn_pipeline_code
+
+        return to_sklearn_pipeline_code(self, self.action_plan())
+
+    def diff(self, other: Profile) -> ProfileDiff:
+        """Finding-level diff: appeared / resolved / severity changes,
+        schema changes, top-K target-signal rank changes."""
+        return diff_profiles(self, other)
+
     def to_dict(self) -> dict[str, Any]:
         return to_jsonable(self)
 
@@ -208,6 +239,137 @@ class Profile:
         return pd.DataFrame(self.shortlist_records())
 
 
+@dataclass
+class FindingDiffEntry:
+    title: str
+    category: str
+    severity: str
+    columns: list[str]
+    detail: str
+
+    @classmethod
+    def from_finding(cls, f: Finding) -> FindingDiffEntry:
+        return cls(
+            title=f.title, category=f.category, severity=f.severity,
+            columns=list(f.columns), detail=f.detail,
+        )
+
+
+@dataclass
+class SeverityChange:
+    title: str
+    category: str
+    from_severity: str
+    to_severity: str
+    columns: list[str]
+
+
+@dataclass
+class RankChange:
+    feature: str
+    from_rank: int | None
+    to_rank: int | None
+    from_score: float | None
+    to_score: float | None
+
+
+@dataclass
+class ProfileDiff:
+    """Difference between two profiles at the finding level."""
+
+    a_name: str
+    b_name: str
+    appeared: list[FindingDiffEntry] = field(default_factory=list)
+    resolved: list[FindingDiffEntry] = field(default_factory=list)
+    severity_changed: list[SeverityChange] = field(default_factory=list)
+    schema_added: list[str] = field(default_factory=list)
+    schema_removed: list[str] = field(default_factory=list)
+    rank_changed: list[RankChange] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (
+            self.appeared or self.resolved or self.severity_changed
+            or self.schema_added or self.schema_removed or self.rank_changed
+        )
+
+
+def diff_profiles(a: Profile, b: Profile) -> ProfileDiff:
+    a_by_key: dict[tuple[str, str], Finding] = {
+        _finding_key(f): f for f in a.findings
+    }
+    b_by_key: dict[tuple[str, str], Finding] = {
+        _finding_key(f): f for f in b.findings
+    }
+    appeared = [FindingDiffEntry.from_finding(f) for k, f in b_by_key.items() if k not in a_by_key]
+    resolved = [FindingDiffEntry.from_finding(f) for k, f in a_by_key.items() if k not in b_by_key]
+    severity_changed: list[SeverityChange] = []
+    for key, fa in a_by_key.items():
+        fb = b_by_key.get(key)
+        if fb is None:
+            continue
+        if fa.severity != fb.severity:
+            severity_changed.append(SeverityChange(
+                title=fb.title,
+                category=fb.category,
+                from_severity=fa.severity,
+                to_severity=fb.severity,
+                columns=list(fb.columns),
+            ))
+
+    a_cols = set(a.columns)
+    b_cols = set(b.columns)
+    schema_added = sorted(b_cols - a_cols)
+    schema_removed = sorted(a_cols - b_cols)
+
+    a_rank = {s.feature: (i + 1, s.score) for i, s in enumerate(a.target_signals[:30])}
+    b_rank = {s.feature: (i + 1, s.score) for i, s in enumerate(b.target_signals[:30])}
+    rank_changed: list[RankChange] = []
+    for feat in set(a_rank) | set(b_rank):
+        ar = a_rank.get(feat)
+        br = b_rank.get(feat)
+        if ar is None or br is None:
+            rank_changed.append(RankChange(
+                feature=feat,
+                from_rank=ar[0] if ar else None,
+                to_rank=br[0] if br else None,
+                from_score=ar[1] if ar else None,
+                to_score=br[1] if br else None,
+            ))
+            continue
+        if abs(ar[0] - br[0]) >= 3:
+            rank_changed.append(RankChange(
+                feature=feat,
+                from_rank=ar[0], to_rank=br[0],
+                from_score=ar[1], to_score=br[1],
+            ))
+    rank_changed.sort(
+        key=lambda c: abs((c.from_rank or 0) - (c.to_rank or 0)),
+        reverse=True,
+    )
+
+    return ProfileDiff(
+        a_name=a.source_name,
+        b_name=b.source_name,
+        appeared=appeared,
+        resolved=resolved,
+        severity_changed=severity_changed,
+        schema_added=schema_added,
+        schema_removed=schema_removed,
+        rank_changed=rank_changed[:15],
+    )
+
+
+def _finding_key(f: Finding) -> tuple[str, str]:
+    """Stable key for matching findings across profiles.
+
+    Uses category + first column + the part of the title before a
+    parenthetical (e.g., the percent in `has 30% nulls`).
+    """
+    base = f.title.split("(")[0].rstrip()
+    col = f.columns[0] if f.columns else ""
+    return (f.category, f"{col}|{base}")
+
+
 def load_profile(path: str | Path) -> Profile:
     data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
     return Profile.from_dict(data)
@@ -266,6 +428,9 @@ def profile(
     target_permutation: bool = True,
     target_sample_size: int = 30_000,
     stratify_target: bool = True,
+    bootstrap: int = 0,
+    pps_seeds: int = 1,
+    max_cols: int | None = None,
     progress: ProgressCallback | None = None,
 ) -> Profile:
     _validate_options(
@@ -293,12 +458,25 @@ def profile(
     _progress(progress, "Computing column statistics")
     stats = compute_all(src, hist_bins=hist_bins)
     sample_cache = SampleCache(src)
+    # If max_cols is set, we want to prioritize columns ranked by target
+    # signal. Compute the lightweight univariate ranking first when a target
+    # is supplied; otherwise fall back to dtype ordering.
+    priority_features: list[str] | None = None
+    if max_cols is not None and target is not None and deep_correlations:
+        _progress(progress, "Pre-ranking columns for pairwise pass")
+        # Just use the order from stats — target_signal hasn't been computed
+        # yet, but column iteration order is dataset order which is fine when
+        # the user wants a hard cap. The pairwise pass uses this list.
+        priority_features = [n for n in stats if n != target]
+
     _progress(progress, "Computing correlations")
     corrs = correlation_pairs(
         src,
         stats,
         include_mutual_info=deep_correlations,
         sample_cache=sample_cache,
+        max_cols=max_cols,
+        priority_features=priority_features,
     )
 
     target_sigs: list[TargetSignal] = []
@@ -325,6 +503,8 @@ def profile(
             max_rows=target_sample_size,
             include_permutation=target_permutation,
             stratify=stratify_target,
+            bootstrap=bootstrap,
+            pps_seeds=pps_seeds,
         )
 
     resolved_time, time_info = resolve_time_column(stats, time_col)

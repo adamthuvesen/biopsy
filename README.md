@@ -1,6 +1,6 @@
 # biopsy
 
-ML-focused EDA as a Python library and CLI. Point `biopsy` at a file or dataframe and get the few modeling risks and opportunities worth acting on: leakage suspects, target signal, drift, nulls, outliers, redundancy, and a ranked feature shortlist.
+ML-focused EDA. Point it at a file or dataframe and get a ranked report of the modeling risks worth acting on first: leakage, target signal, drift, nulls, outliers, redundancy.
 
 ```python
 from biopsy import profile
@@ -10,32 +10,36 @@ prof = profile(df, target="label")
 prof.top_findings()
 prof.leakage_suspects()
 prof.feature_shortlist(limit=20)
-prof.drop_candidates()
+prof.action_plan()                 # drop / impute / encode / transform / split / cv
+prof.to_sklearn_pipeline_code()    # runnable ColumnTransformer module
 ```
 
-The CLI uses the same profiling engine:
+CLI:
 
 ```bash
 biopsy profile data.parquet --target label
-biopsy profile data.parquet --target label --deep
 biopsy profile data.parquet --target label --html report.html --open
-biopsy profile data.parquet --target label --save profile.json
-biopsy render profile.json --html report.html
+biopsy profile data.parquet --target label --pipeline preprocess.py
+biopsy compare train.parquet eval.parquet --target label
+biopsy diff old_profile.json new_profile.json
+biopsy doctor data.parquet                 # schema + candidate target/time columns
 biopsy demo --rows 5000
 ```
 
 ## Why
 
-`ydata-profiling`, SweetViz, and DataPrep are broad report generators. `biopsy` is opinionated: it ranks what matters for modeling and keeps the default view small enough to use before training a model.
+`ydata-profiling`, SweetViz, and DataPrep generate broad reports. `biopsy` ranks. The default view is short enough to read before training a model.
 
 ## What it reports
 
 - **Distributions** — histograms, skew, outliers, near-constant columns
-- **Data quality** — null rates, empty columns, identifiers, cardinality
-- **Target signal** — MI, PPS, Spearman, raw AUC, AUC lift, optional permutation importance
+- **Data quality** — null rates, empty columns, identifiers, cardinality, encoded null sentinels, date-strings, bool-like ints, free-text
+- **Target signal** — MI, PPS, Spearman, raw AUC, AUC lift, optional permutation importance, optional bootstrap CIs and multi-seed PPS stability
 - **Redundancy** — Spearman-distance clustering with a feature shortlist
-- **Temporal leakage** — random-vs-time split gaps, monotonicity, target drift
+- **Temporal leakage** — random-vs-time split gaps, monotonicity, target drift, post-event signals
 - **Correlations** — Pearson in DuckDB SQL and non-linear MI
+- **Action plan** — drop / impute / encode / transform / review buckets plus a split + CV + class-imbalance recommendation
+- **Drift** (`biopsy compare`) — KS, Wasserstein, PSI on numerics; chi-square + JS divergence on categoricals; schema + target deltas
 
 ## Install
 
@@ -67,7 +71,7 @@ prof = profile(
 )
 ```
 
-Dataframe input:
+DataFrame input:
 
 ```python
 import pandas as pd
@@ -77,18 +81,18 @@ df = pd.read_parquet("training.parquet")
 prof = profile(df, target="label", source_name="training frame")
 ```
 
-Work with plain Python records:
+Plain Python records and serialization:
 
 ```python
 findings = prof.findings_records()
 signals = prof.target_signal_records()
 shortlist = prof.shortlist_records()
+plan = prof.action_plan_records()
 payload = prof.to_dict()
-json_text = prof.to_json()
 prof.save("profile.json")
 ```
 
-Use notebook-friendly pandas frames when pandas is installed:
+Pandas frames (when pandas is installed):
 
 ```python
 prof.findings_frame()
@@ -103,13 +107,43 @@ In notebooks, the profile renders itself as HTML:
 profile(df, target="label").show()
 ```
 
-Use ML helpers for modeling decisions:
+Modeling helpers:
 
 ```python
-prof.feature_shortlist(limit=30)      # shortlist from redundancy clusters
-prof.leakage_suspects()              # columns suspiciously predictive of target
-prof.drop_candidates()               # empty/constant/ID-like/leaky columns
+prof.feature_shortlist(limit=30)      # cluster representatives, ranked
+prof.leakage_suspects()               # columns suspiciously predictive of target
+prof.drop_candidates()                # empty/constant/ID-like/leaky columns
 prof.top_findings(category="quality")
+
+plan = prof.action_plan()
+plan.drop                             # list[ActionItem]
+plan.impute                           # list[ActionItem]
+plan.encode                           # list[ActionItem]
+plan.transform                        # list[ActionItem]
+plan.split                            # SplitRecommendation (temporal / stratified / random)
+plan.cv                               # CVRecommendation
+plan.class_strategy                   # ClassStrategy or None
+
+# Generate a runnable sklearn ColumnTransformer module:
+Path("preprocess.py").write_text(prof.to_sklearn_pipeline_code())
+```
+
+Drift between two profiles or two datasets:
+
+```python
+from biopsy import compare_profiles
+
+report = compare_profiles(prof_train, prof_eval)
+report.schema.added, report.schema.removed
+report.target.detail                  # target-rate or target-mean delta
+report.top(10)                        # most-drifted features by KS / PSI / JS
+```
+
+Finding-level diff between two saved profiles:
+
+```python
+diff = prof_v2.diff(prof_v1)
+diff.appeared, diff.resolved, diff.severity_changed, diff.rank_changed
 ```
 
 Supported inputs:
@@ -120,36 +154,44 @@ Supported inputs:
 - Arrow Table or RecordBatchReader
 - DuckDB relations
 
-Pandas, Polars, and Arrow are optional dependencies. `biopsy` registers in-memory objects with DuckDB and keeps the CLI dependency set small.
+Pandas, Polars, and Arrow are optional dependencies. `biopsy` registers in-memory objects with DuckDB and keeps the core dependency set small.
 
 ## CLI
 
 ```bash
 biopsy profile <file> [options]
-biopsy init <file>
-biopsy render profile.json --html report.html
+biopsy compare <A> <B> [options]              # data files or saved JSONs
+biopsy diff <a.json> <b.json>
+biopsy doctor <file>                          # schema + candidate target/time columns
+biopsy init <file>                            # write a starter biopsy.toml
+biopsy notebook <out.ipynb> --file <data> --target <col>
+biopsy render <profile.json> --html <out.html>
 ```
+
+### `biopsy profile` flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `--target / -t COL` | — | Target column for predictive metrics |
 | `--time COL` | auto | Time column for temporal leakage |
-| `--exclude / -x COL` | — | Drop column from analysis |
+| `--exclude / -x COL` | — | Drop column from analysis (repeatable) |
 | `--exclude-file PATH` | — | Drop columns listed one-per-line |
-| `--ignore-missing-exclude` | off | Skip absent excluded columns for versioned datasets |
-| `--filter / -w EXPR` | — | Filter rows before profiling |
+| `--ignore-missing-exclude` | off | Skip absent excluded columns |
+| `--filter / -w EXPR` | — | Filter rows before profiling (repeatable, ANDed) |
 | `--sample N` | — | Reservoir-sample N rows after filtering |
 | `--target-sample N` | `30000` | Target-metric sample size; stratified for rare classification targets |
-| `--fast / --deep` | `--fast` | Fast skips pairwise MI and target permutation; deep runs the full analysis |
+| `--fast / --deep` | `--fast` | `--deep` adds pairwise MI and target permutation |
+| `--max-cols N` | — | Cap columns in the pairwise MI pass (wide-dataset speedup) |
 | `--all-columns` | off | Print the full terminal column table |
 | `--shortlist N` | — | Cap the feature shortlist |
-| `--cluster-cutoff X` | `0.30` | Cluster cutoff on `1-|rho|` |
+| `--cluster-cutoff X` | `0.30` | Cluster cutoff on `1 - |ρ|` |
 | `--html PATH` | — | Write an HTML report |
 | `--save PATH` | — | Save the reusable profile JSON artifact |
-| `--plotly-cdn` | off | Use Plotly from CDN instead of embedding it in the HTML |
-| `--config PATH` | — | TOML config with defaults; use `--profile-name` for `[profiles.NAME]` |
-| `--open` | — | Open the HTML report |
+| `--pipeline PATH` | — | Write a sklearn ColumnTransformer module from the action plan |
+| `--plotly-cdn` | off | Load Plotly from CDN instead of embedding |
+| `--config PATH` | — | TOML config with defaults; pair with `--profile-name` for `[profiles.NAME]` |
 | `--bins N` | `24` | Histogram bin count |
+| `--open` | — | Open the HTML report |
 
 Filter expressions:
 
@@ -159,8 +201,6 @@ Filter expressions:
 --filter 'event_time is not null'
 --filter 'label == positive'
 ```
-
-Filters are ANDed and applied before sampling.
 
 Config files keep repeated project choices out of the shell:
 
@@ -182,13 +222,48 @@ biopsy profile data.parquet --config biopsy.toml
 biopsy profile data.parquet --config biopsy.toml --profile-name deep --html report.html
 ```
 
-Start a config from a real file:
+Unknown TOML keys are rejected with a did-you-mean suggestion.
+
+Generate a starter config from a real file:
 
 ```bash
 biopsy init data.parquet
 biopsy profile data.parquet --config biopsy.toml --save profile.json
 biopsy render profile.json --html report.html
 ```
+
+### `biopsy compare`
+
+```bash
+biopsy compare train.parquet eval.parquet --target label --time event_time --html drift.html
+biopsy compare profile_v1.json profile_v2.json --save compare.json
+```
+
+Accepts either two data files or two saved profile JSONs. Reports schema diff, target delta, and per-column drift (KS / Wasserstein / PSI for numerics; chi-square + JS divergence for categoricals). HTML output includes per-feature side-by-side distributions.
+
+### `biopsy diff`
+
+```bash
+biopsy diff old_profile.json new_profile.json
+```
+
+Finding-level changes between two saved profiles: appeared / resolved findings, severity changes, schema changes, target-signal rank shifts.
+
+### `biopsy doctor`
+
+```bash
+biopsy doctor data.parquet
+```
+
+Schema preview with candidate target columns, candidate time columns, and per-column "looks like" hints (identifier, boolean, low-card categorical, high-null). Sub-second on most datasets; does not run the full profile.
+
+### `biopsy notebook`
+
+```bash
+biopsy notebook starter.ipynb --file data.parquet --target label
+```
+
+Writes a notebook scaffold using the action plan's preprocessor, shortlist, split, and CV recommendation as a starting point.
 
 ## Development
 

@@ -93,17 +93,31 @@ def mutual_info_matrix(
     stats: dict[str, ColumnStats],
     max_rows: int = 20_000,
     sample_cache: SampleCache | None = None,
+    *,
+    max_cols: int | None = None,
+    priority_features: list[str] | None = None,
 ) -> dict[tuple[str, str], float]:
     """Pairwise mutual information for numeric + low-cardinality categorical columns.
 
     Normalized to [0, 1] via 1 - exp(-2 * MI), a standard transform that maps MI to a
     correlation-like scale.
+
+    When `max_cols` is set, restricts the pairwise pass to the top-N columns,
+    preferring those listed in `priority_features` (e.g., ranked by target
+    signal). This cuts the O(n²) MI cost on wide datasets.
     """
     eligible = [
         n for n, s in stats.items()
         if not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 50))
     ]
+    if max_cols is not None and len(eligible) > max_cols:
+        if priority_features:
+            priority = [c for c in priority_features if c in eligible]
+            rest = [c for c in eligible if c not in priority]
+            eligible = (priority + rest)[:max_cols]
+        else:
+            eligible = eligible[:max_cols]
     if len(eligible) < 2:
         return {}
 
@@ -155,10 +169,17 @@ def correlation_pairs(
     *,
     include_mutual_info: bool = True,
     sample_cache: SampleCache | None = None,
+    max_cols: int | None = None,
+    priority_features: list[str] | None = None,
 ) -> list[CorrelationPair]:
     pearson = pearson_matrix(src, stats)
     mi = (
-        mutual_info_matrix(src, stats, sample_cache=sample_cache)
+        mutual_info_matrix(
+            src, stats,
+            sample_cache=sample_cache,
+            max_cols=max_cols,
+            priority_features=priority_features,
+        )
         if include_mutual_info else {}
     )
 
@@ -184,6 +205,33 @@ class TargetSignal:
     support: int = 0
     positive_count: int | None = None
     is_leak_suspect: bool = False
+    # CIs and stability — populated when the caller opts in via bootstrap /
+    # multi-seed PPS. `None` means the metric wasn't recomputed.
+    auc_ci_low: float | None = None
+    auc_ci_high: float | None = None
+    mi_ci_low: float | None = None
+    mi_ci_high: float | None = None
+    pps_stability: float | None = None  # coefficient of variation across seeds
+
+    @property
+    def confidence(self) -> str:
+        """Qualitative confidence tier — `low` / `medium` / `high`.
+
+        Tiers reflect effective sample size; binary classification also
+        factors in positive-class support since rare-event metrics are
+        unstable until the positive class has enough rows.
+        """
+        if self.positive_count is not None:
+            if self.positive_count < 30 or self.support < 200:
+                return "low"
+            if self.positive_count < 100 or self.support < 1000:
+                return "medium"
+            return "high"
+        if self.support < 200:
+            return "low"
+        if self.support < 1000:
+            return "medium"
+        return "high"
 
     @property
     def best_score(self) -> float:
@@ -347,6 +395,8 @@ def target_signal(
     *,
     include_permutation: bool = True,
     stratify: bool = True,
+    bootstrap: int = 0,
+    pps_seeds: int = 1,
 ) -> list[TargetSignal]:
     """Rank features by association with the target.
 
@@ -465,6 +515,12 @@ def target_signal(
         signals.sort(key=lambda s: s.best_score, reverse=True)
     else:
         signals.sort(key=lambda s: s.score, reverse=True)
+
+    if bootstrap > 0 or pps_seeds > 1:
+        _attach_uncertainty(
+            signals, feat_records, y_full, target_mask, target_kind, is_binary_target,
+            n_bootstrap=bootstrap, n_pps_seeds=pps_seeds,
+        )
 
     # leakage heuristic: PPS ≥ 0.85, OR PPS ≥ 0.6 AND >= 2× the next best feature.
     for i, s in enumerate(signals):
@@ -592,3 +648,95 @@ def _attach_permutation_importance(
     normalized = importances / importances.max()
     for sig_idx, imp in zip(kept_signal_idx, normalized, strict=True):
         signals[sig_idx].perm_importance = float(max(imp, 0.0))
+
+
+def _attach_uncertainty(
+    signals: list[TargetSignal],
+    feat_records: list[tuple[str, np.ndarray, bool, np.ndarray]],
+    y_full: np.ndarray,
+    target_mask: np.ndarray,
+    target_kind: str,
+    is_binary_target: bool,
+    *,
+    n_bootstrap: int,
+    n_pps_seeds: int,
+) -> None:
+    """Compute 95% bootstrap CIs on AUC + MI and a multi-seed PPS stability
+    score. Mutates `signals` in-place; opt-in via target_signal() args."""
+    feats_by_name = {name: (x_enc, x_disc, fmask) for name, x_enc, x_disc, fmask in feat_records}
+    rng_root = np.random.default_rng(42)
+
+    for s in signals:
+        record = feats_by_name.get(s.feature)
+        if record is None:
+            continue
+        x_enc, x_disc, fmask = record
+        y_sub_mask = fmask[target_mask]
+        y_sub = y_full[y_sub_mask]
+        n = len(y_sub)
+        if n < 50:
+            continue
+
+        # --- bootstrap CIs on AUC + MI ---
+        if n_bootstrap > 0:
+            aucs: list[float] = []
+            mis: list[float] = []
+            for _ in range(n_bootstrap):
+                idx = rng_root.integers(0, n, size=n)
+                x_b = x_enc[idx]
+                y_b = y_sub[idx]
+                if is_binary_target and len(np.unique(y_b)) == 2:
+                    pair = _auc_scores(y_b.astype(int), x_b)
+                    if pair is not None:
+                        aucs.append(pair[0])
+                try:
+                    if target_kind == "classification":
+                        mi = mutual_info_classif(
+                            x_b.reshape(-1, 1), y_b.astype(int),
+                            discrete_features=[x_disc], random_state=42,
+                        )[0]
+                    else:
+                        mi = mutual_info_regression(
+                            x_b.reshape(-1, 1), y_b,
+                            discrete_features=[x_disc], random_state=42,
+                        )[0]
+                    mis.append(float(1 - np.exp(-2 * max(mi, 0))))
+                except ValueError:
+                    pass
+            if aucs:
+                s.auc_ci_low = float(np.quantile(aucs, 0.025))
+                s.auc_ci_high = float(np.quantile(aucs, 0.975))
+            if mis:
+                s.mi_ci_low = float(np.quantile(mis, 0.025))
+                s.mi_ci_high = float(np.quantile(mis, 0.975))
+
+        # --- multi-seed PPS stability ---
+        if n_pps_seeds > 1:
+            scores: list[float] = []
+            X = x_enc.reshape(-1, 1)
+            for seed in range(n_pps_seeds):
+                idx = np.random.default_rng(seed).permutation(n)
+                y_p = y_sub[idx]
+                x_p = x_enc[idx].reshape(-1, 1)
+                try:
+                    if target_kind == "classification":
+                        score = _pps_classification(x_p, y_p.astype(int))
+                    else:
+                        score = _pps_regression(x_p, y_p)
+                except ValueError:
+                    continue
+                scores.append(score)
+            # Re-run the un-permuted PPS for the "real" measurement too.
+            try:
+                if target_kind == "classification":
+                    real = _pps_classification(X, y_sub.astype(int))
+                else:
+                    real = _pps_regression(X, y_sub)
+                scores.append(real)
+            except ValueError:
+                pass
+            if len(scores) >= 2:
+                arr = np.asarray(scores, dtype=float)
+                mean = float(arr.mean())
+                if mean > 0:
+                    s.pps_stability = float(arr.std(ddof=1) / mean)

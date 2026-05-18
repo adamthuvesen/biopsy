@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>biopsy compare — {{ a.source_name }} → {{ b.source_name }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if plotly_cdn %}
+  <script src="{{ plotly_cdn }}"></script>
+  {% elif plotly_js %}
+  <script>{{ plotly_js | safe }}</script>
+  {% endif %}
+  <style>
+    :root { --page-max: 1100px; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+           color: {{ palette.ink }}; background: {{ palette.surface }};
+           line-height: 1.45; }
+    .page { max-width: var(--page-max); margin: 0 auto; padding: 32px 48px; }
+    h1 { font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px 0; }
+    h2 { margin-top: 32px; border-bottom: 1px solid {{ palette.line }}; padding-bottom: 4px; }
+    .meta { color: {{ palette.ink_3 }}; font-size: 0.9rem; margin-bottom: 24px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 0.92rem;
+            table-layout: fixed; }
+    th, td { border-bottom: 1px solid {{ palette.line }}; padding: 6px 10px; text-align: left;
+             overflow-wrap: anywhere; }
+    th { background: {{ palette.surface_2 }}; font-weight: 600; }
+    td.num { font-variant-numeric: tabular-nums; text-align: right; }
+    .severity-critical { color: {{ palette.crit }}; font-weight: 600; }
+    .severity-warning  { color: {{ palette.warn }}; font-weight: 600; }
+    .severity-info     { color: {{ palette.ink_2 }}; }
+    .empty { color: {{ palette.ink_4 }}; font-style: italic; }
+    code { background: {{ palette.surface_2 }}; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+    .feature-card { border: 1px solid {{ palette.line }}; border-radius: 6px;
+                    padding: 12px 16px; margin: 12px 0; background: #fffefb; }
+    .feature-card summary { cursor: pointer; padding: 4px 0; }
+    .feature-card[open] summary { border-bottom: 1px solid {{ palette.line }}; margin-bottom: 12px; }
+    .card-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+                 gap: 24px; align-items: start; }
+    .card-chart { min-width: 0; overflow: hidden; }
+    .card-chart .plotly-graph-div { max-width: 100% !important; }
+    .card-meta table { font-size: 0.85rem; }
+    .card-meta th { width: 40%; }
+    @media (max-width: 900px) {
+      .card-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+  <h1>biopsy compare</h1>
+  <div class="meta">
+    A · <strong>{{ a.source_name }}</strong> ({{ a.n_rows | num }} rows × {{ a.n_cols }} cols)
+    &nbsp;→&nbsp;
+    B · <strong>{{ b.source_name }}</strong> ({{ b.n_rows | num }} rows × {{ b.n_cols }} cols)
+  </div>
+
+  <section id="schema-diff">
+    <h2>Schema diff</h2>
+    {% if not (report.schema.added or report.schema.removed or report.schema.type_changed) %}
+      <p class="empty">Schema unchanged.</p>
+    {% else %}
+      <table>
+        <thead><tr><th>change</th><th>columns</th></tr></thead>
+        <tbody>
+          {% if report.schema.added %}
+          <tr><td>added (in B only)</td><td>{{ report.schema.added | join(", ") }}</td></tr>
+          {% endif %}
+          {% if report.schema.removed %}
+          <tr><td>removed (only in A)</td><td>{{ report.schema.removed | join(", ") }}</td></tr>
+          {% endif %}
+          {% if report.schema.type_changed %}
+          <tr><td>type changed</td><td>
+            {% for c, ka, kb in report.schema.type_changed %}
+              <code>{{ c }}</code> ({{ ka }}→{{ kb }}){% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  {% if report.target %}
+  <section id="target-delta">
+    <h2>Target Δ</h2>
+    <p>{{ report.target.detail }}</p>
+  </section>
+  {% endif %}
+
+  <section id="drifted-features">
+    <h2>Top drifted features</h2>
+    {% set rows = report.drifts | selectattr("drift_score", "gt", 0) | list %}
+    {% if not rows %}
+      <p class="empty">No drift detected above thresholds.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>column</th><th>kind</th>
+            <th class="num">KS</th><th class="num">PSI</th><th class="num">JS</th>
+            <th class="num">null Δ</th><th class="num">drift score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in rows[:30] %}
+          <tr>
+            <td><code>{{ d.column }}</code></td>
+            <td>{{ d.kind }}</td>
+            <td class="num">{{ d.ks_stat | sig }}</td>
+            <td class="num">{{ d.psi | sig }}</td>
+            <td class="num">{{ d.js_divergence | sig }}</td>
+            <td class="num">{{ d.null_rate_delta | pct }}</td>
+            <td class="num">{{ "%.2f" % d.drift_score }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  {% if feature_cards %}
+  <section id="feature-cards">
+    <h2>Feature drilldown</h2>
+    {% for card in feature_cards %}
+      <details open class="feature-card">
+        <summary>
+          <code>{{ card.drift.column }}</code>
+          <span style="color: {{ palette.ink_3 }};">·
+            {{ card.drift.kind }} · drift {{ "%.2f" % card.drift.drift_score }}</span>
+        </summary>
+        <div class="card-grid">
+          <div class="card-chart">{{ card.chart | safe }}</div>
+          <div class="card-meta">
+            <table>
+              <tr><th>metric</th><th class="num">A</th><th class="num">B</th></tr>
+              <tr><td>n (rows)</td>
+                <td class="num">{{ a.n_rows | num }}</td>
+                <td class="num">{{ b.n_rows | num }}</td></tr>
+              <tr><td>null rate</td>
+                <td class="num">{{ "%.1f%%" % (card.stats_a.null_rate * 100) }}</td>
+                <td class="num">{{ "%.1f%%" % (card.stats_b.null_rate * 100) }}</td></tr>
+              {% if card.drift.kind == "numeric" %}
+              <tr><td>mean</td>
+                <td class="num">{{ card.drift.mean_a | sig }}</td>
+                <td class="num">{{ card.drift.mean_b | sig }}</td></tr>
+              <tr><td>KS</td>
+                <td class="num" colspan="2">{{ card.drift.ks_stat | sig }} (p={{ card.drift.ks_pvalue | sig }})</td></tr>
+              <tr><td>Wasserstein</td>
+                <td class="num" colspan="2">{{ card.drift.wasserstein | sig }}</td></tr>
+              <tr><td>PSI</td>
+                <td class="num" colspan="2">{{ card.drift.psi | sig }}</td></tr>
+              {% else %}
+              <tr><td>χ² p</td>
+                <td class="num" colspan="2">{{ card.drift.chi2_pvalue | sig }}</td></tr>
+              <tr><td>JS divergence</td>
+                <td class="num" colspan="2">{{ card.drift.js_divergence | sig }}</td></tr>
+              {% endif %}
+            </table>
+          </div>
+        </div>
+      </details>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section id="drift-findings">
+    <h2>Drift findings</h2>
+    {% if not report.findings %}
+      <p class="empty">No drift findings.</p>
+    {% else %}
+      <table>
+        <thead><tr><th>severity</th><th>title</th><th>detail</th></tr></thead>
+        <tbody>
+          {% for f in report.findings[:30] %}
+          <tr>
+            <td><span class="severity-{{ f.severity }}">{{ f.severity }}</span></td>
+            <td>{{ f.title | ticks }}</td>
+            <td>{{ f.detail }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+  </div><!-- /.page -->
+</body>
+</html>

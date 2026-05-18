@@ -12,8 +12,8 @@ from __future__ import annotations
 import html as html_lib
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -439,77 +439,9 @@ def _div(fig: go.Figure) -> str:
 
 
 # --- synthesis: action plan + quality score --------------------------------
-
-@dataclass
-class ActionItem:
-    name: str
-    reason: str
-    category: str  # original finding category
-    severity: str
-
-
-@dataclass
-class ActionPlan:
-    drop: list[ActionItem]
-    review: list[ActionItem]
-    transform: list[ActionItem]
-
-
-def _build_action_plan(prof: Profile) -> ActionPlan:
-    """Synthesize three buckets from findings: drop / review / transform.
-
-    Drop: empty, constant, near-constant, encoded-null columns, ID-shaped.
-    Review: leakage suspects, temporal anomalies, high-null, target issues.
-    Transform: heavy skew, IQR outliers — modeling preparation hints.
-    """
-    drop: dict[str, ActionItem] = {}
-    review: dict[str, ActionItem] = {}
-    transform: dict[str, ActionItem] = {}
-
-    drop_titles = {
-        "is 100% null", "is constant", "is near-constant",
-        "looks like an identifier",
-    }
-    review_categories = {"leakage", "temporal", "target"}
-
-    for f in prof.findings:
-        col = f.columns[0] if f.columns else None
-        if not col or col == prof.target:
-            # don't suggest dropping the target column; leakage suspects
-            # also reference [feature, target] — keep only the feature.
-            if f.category == "leakage" and len(f.columns) >= 1:
-                col = f.columns[0]
-            else:
-                continue
-
-        item = ActionItem(
-            name=col,
-            reason=f.title.replace("`", ""),
-            category=f.category,
-            severity=f.severity,
-        )
-
-        if any(t in f.title for t in drop_titles) or (
-            f.category == "quality" and f.severity == "critical"
-        ):
-            drop.setdefault(col, item)
-        elif f.category in review_categories and f.severity in {"critical", "warning"}:
-            review.setdefault(col, item)
-        elif f.category == "distribution":
-            transform.setdefault(col, item)
-        elif (
-            f.category == "quality"
-            and f.severity in {"warning", "info"}
-            and "encoded nulls" in f.title
-        ):
-            # encoded null sentinels — review (replace before profiling)
-            review.setdefault(col, item)
-
-    return ActionPlan(
-        drop=list(drop.values()),
-        review=list(review.values()),
-        transform=list(transform.values()),
-    )
+# The action plan itself lives in `biopsy.action_plan`. The HTML template
+# reads it via the same `Profile.action_plan()` entry point as the terminal
+# renderer and the sklearn pipeline codegen — one source of opinions.
 
 
 def _quality_score(prof: Profile) -> tuple[int, str]:
@@ -614,7 +546,35 @@ def render_string(
         prof.correlations, prof.columns, "mutual_info", max_features=heatmap_limit,
     )
 
-    action_plan = _build_action_plan(prof)
+    action_plan = prof.action_plan()
+
+    # Per-feature drilldown cards for the top-N shortlisted features.
+    drilldown_cards: list[dict[str, Any]] = []
+    if prof.clusters is not None and prof.clusters.shortlist:
+        sigs_by_feat = {s.feature: s for s in prof.target_signals}
+        for entry in prof.clusters.shortlist[:12]:
+            stats = prof.columns.get(entry.feature)
+            if stats is None:
+                continue
+            if stats.kind == "numeric":
+                chart = _histogram_fig(stats)
+            elif stats.kind in {"text", "bool"}:
+                chart = _bar_fig(stats)
+            elif stats.kind == "temporal":
+                chart = _temporal_column_fig(stats)
+            else:
+                chart = ""
+            top_corrs = [
+                p for p in prof.correlations
+                if entry.feature in (p.a, p.b) and p.score >= 0.3
+            ][:5]
+            drilldown_cards.append({
+                "entry": entry,
+                "stats": stats,
+                "chart": Markup(chart),
+                "signal": sigs_by_feat.get(entry.feature),
+                "top_corrs": top_corrs,
+            })
     quality_score, verdict = _quality_score(prof)
 
     # Severity tallies for the vital signs ribbon.
@@ -652,6 +612,7 @@ def render_string(
         pearson_heatmap=pearson_heatmap,
         mi_heatmap=mi_heatmap,
         action_plan=action_plan,
+        drilldown_cards=drilldown_cards,
         quality_score=quality_score,
         verdict=verdict,
         sev_counts=sev_counts,
@@ -682,6 +643,113 @@ def render(
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
     html = render_string(prof, embed_plotly=embed_plotly, heatmap_limit=heatmap_limit)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    return output_path
+
+
+def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
+    """Side-by-side overlay: A in oxblood, B in indigo. Numeric uses
+    histogram bars; categorical uses top-K category counts.
+    """
+    if sa.kind == "numeric" and sb.kind == "numeric" and sa.histogram and sb.histogram:
+        x_a = [0.5 * (lo + hi) for lo, hi, _ in sa.histogram]
+        y_a = [c for _, _, c in sa.histogram]
+        x_b = [0.5 * (lo + hi) for lo, hi, _ in sb.histogram]
+        y_b = [c for _, _, c in sb.histogram]
+        fig = go.Figure()
+        fig.add_bar(x=x_a, y=y_a, name="A", marker=dict(color=ACCENT), opacity=0.55)
+        fig.add_bar(x=x_b, y=y_b, name="B", marker=dict(color="#1E3A8A"), opacity=0.55)
+        fig.update_layout(
+            template="biopsy", barmode="overlay",
+            autosize=True, height=180,
+            margin=dict(l=40, r=20, t=10, b=24),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+        )
+        return _div(fig)
+    if sa.top_values or sb.top_values:
+        a_counts = {str(k): c for k, c in sa.top_values if isinstance(c, (int, float))}
+        b_counts = {str(k): c for k, c in sb.top_values if isinstance(c, (int, float))}
+        labels = sorted(
+            set(a_counts) | set(b_counts),
+            key=lambda k: -(a_counts.get(k, 0) + b_counts.get(k, 0)),
+        )[:10]
+        if not labels:
+            return ""
+        fig = go.Figure()
+        fig.add_bar(
+            x=labels, y=[a_counts.get(k, 0) for k in labels],
+            name="A", marker=dict(color=ACCENT),
+        )
+        fig.add_bar(
+            x=labels, y=[b_counts.get(k, 0) for k in labels],
+            name="B", marker=dict(color="#1E3A8A"),
+        )
+        fig.update_layout(
+            template="biopsy", barmode="group",
+            autosize=True, height=180,
+            margin=dict(l=40, r=20, t=10, b=24),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+        )
+        return _div(fig)
+    return ""
+
+
+def render_compare(
+    prof_a: Profile,
+    prof_b: Profile,
+    report: object,
+    output_path: str | Path,
+    *,
+    embed_plotly: bool = True,
+) -> Path:
+    """Render a compare HTML report.
+
+    Uses `templates/compare.html.j2`. Falls back to the same Plotly
+    embedding path as `render` so reports work offline.
+    """
+    _ensure_template()
+    tpl_dir = Path(__file__).parent.parent / "templates"
+    env = Environment(loader=FileSystemLoader(tpl_dir), autoescape=select_autoescape(["html"]))
+    env.filters["num"] = _num
+    env.filters["pct"] = lambda x: "—" if x is None else f"{x:+.2%}"
+    env.filters["sig"] = lambda x: "—" if x is None else f"{x:.3g}"
+    env.filters["ticks"] = _ticks_filter
+    tpl = env.get_template("compare.html.j2")
+    # Pre-render per-feature comparison charts for the top-N drifted columns.
+    feature_cards = []
+    top = getattr(report, "top", lambda n=12: [])(12)
+    for d in top:
+        if d.drift_score <= 0:
+            continue
+        sa = prof_a.columns.get(d.column)
+        sb = prof_b.columns.get(d.column)
+        if sa is None or sb is None:
+            continue
+        feature_cards.append({
+            "drift": d,
+            "chart": Markup(_compare_feature_fig(sa, sb)),
+            "stats_a": sa,
+            "stats_b": sb,
+        })
+    html = tpl.render(
+        a=prof_a,
+        b=prof_b,
+        report=report,
+        feature_cards=feature_cards,
+        plotly_cdn=None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js",
+        plotly_js=get_plotlyjs() if embed_plotly else None,
+        palette={
+            "ink": INK, "ink_2": INK_2, "ink_3": INK_3, "ink_4": INK_4,
+            "surface": SURFACE, "surface_2": SURFACE_2,
+            "line": LINE, "line_2": LINE_2,
+            "accent": ACCENT, "accent_soft": ACCENT_SOFT, "accent_deep": ACCENT_DEEP,
+            "warn": WARN, "crit": CRIT, "ok": OK,
+        },
+    )
+    output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     return output_path

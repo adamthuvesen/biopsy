@@ -64,6 +64,10 @@ def profile(
     ),
     html: Path | None = typer.Option(None, "--html", help="Write an HTML supplement."),
     save: Path | None = typer.Option(None, "--save", help="Write the profile artifact as JSON."),
+    pipeline: Path | None = typer.Option(
+        None, "--pipeline",
+        help="Write a runnable sklearn ColumnTransformer module from the action plan.",
+    ),
     plotly_cdn: bool | None = typer.Option(
         None, "--plotly-cdn", help="Use Plotly from CDN instead of embedding it in HTML."
     ),
@@ -85,6 +89,11 @@ def profile(
         True, "--progress/--no-progress", help="Print major profiling phases to stderr."
     ),
     bins: int | None = typer.Option(None, "--bins", min=1, help="Histogram bin count."),
+    max_cols: int | None = typer.Option(
+        None, "--max-cols", min=2,
+        help="Cap the number of columns in the pairwise MI pass. "
+             "Useful on wide datasets to keep runtime sub-linear.",
+    ),
     open_browser: bool = typer.Option(False, "--open", help="Open the HTML report in a browser."),
 ) -> None:
     """Profile a dataset and print a ranked report."""
@@ -135,6 +144,7 @@ def profile(
         target_permutation=not fast,
         target_sample_size=target_sample,
         stratify_target=True,
+        max_cols=max_cols,
         progress=progress_cb,
     )
     render_terminal(prof, console=console, all_columns=all_columns)
@@ -142,6 +152,12 @@ def profile(
     if save:
         saved = prof.save(save)
         console.print(f"\n[dim]Profile JSON:[/dim] {saved}")
+
+    if pipeline:
+        pipeline_path = Path(pipeline).expanduser().resolve()
+        pipeline_path.parent.mkdir(parents=True, exist_ok=True)
+        pipeline_path.write_text(prof.to_sklearn_pipeline_code(), encoding="utf-8")
+        console.print(f"\n[dim]Sklearn pipeline:[/dim] {pipeline_path}")
 
     if html or open_browser:
         out = html or Path(tempfile.gettempdir()) / f"biopsy-{path.stem}.html"
@@ -167,6 +183,282 @@ def render_saved_profile(
     console.print(f"[dim]HTML report:[/dim] {rendered}")
     if open_browser:
         webbrowser.open(rendered.as_uri())
+
+
+@app.command()
+def compare(
+    a: Path = typer.Argument(..., help="Side A: data file or profile JSON."),
+    b: Path = typer.Argument(..., help="Side B: data file or profile JSON."),
+    target: str | None = typer.Option(
+        None, "--target", "-t", help="Target column (used when A and B are data files)."
+    ),
+    time_col: str | None = typer.Option(
+        None, "--time", help="Time column (used when A and B are data files)."
+    ),
+    where: list[str] = typer.Option(
+        [], "--filter", "-w", help="Filter applied to both sides when reading data files."
+    ),
+    sample: int | None = typer.Option(
+        None, "--sample", min=1, help="Reservoir sample N rows per side."
+    ),
+    html: Path | None = typer.Option(None, "--html", help="Write a compare HTML report."),
+    save: Path | None = typer.Option(None, "--save", help="Save the compare report JSON."),
+    plotly_cdn: bool = typer.Option(
+        False, "--plotly-cdn", help="Use Plotly from CDN instead of embedding."
+    ),
+    open_browser: bool = typer.Option(False, "--open", help="Open the HTML report."),
+    progress: bool = typer.Option(
+        True, "--progress/--no-progress", help="Print profiling phases."
+    ),
+) -> None:
+    """Drift report comparing two datasets (or two saved profiles)."""
+    from biopsy.compare import compare_profiles
+    from biopsy.render.html import render_compare
+
+    console = Console(width=120)
+    progress_console = Console(stderr=True, width=120)
+
+    def show(side: str, msg: str) -> None:
+        progress_console.print(f"[dim]biopsy compare ({side}):[/dim] {msg}")
+
+    prof_a = _load_side(a, "A", target, time_col, where, sample, show if progress else None)
+    prof_b = _load_side(b, "B", target, time_col, where, sample, show if progress else None)
+    report = compare_profiles(prof_a, prof_b)
+    _print_compare(console, report)
+
+    if save:
+        import json as _json
+
+        from biopsy.serialize import to_jsonable
+
+        payload = {
+            "a_name": report.a_name,
+            "b_name": report.b_name,
+            "schema": to_jsonable(report.schema),
+            "drifts": [to_jsonable(d) for d in report.drifts],
+            "target": to_jsonable(report.target) if report.target else None,
+            "findings": [to_jsonable(f) for f in report.findings],
+        }
+        save_path = Path(save).expanduser().resolve()
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        console.print(f"\n[dim]Compare JSON:[/dim] {save_path}")
+
+    if html or open_browser:
+        out = html or Path(tempfile.gettempdir()) / f"biopsy-compare-{a.stem}-{b.stem}.html"
+        rendered = render_compare(prof_a, prof_b, report, out, embed_plotly=not plotly_cdn)
+        console.print(f"\n[dim]HTML report:[/dim] {rendered}")
+        if open_browser:
+            webbrowser.open(rendered.as_uri())
+
+
+@app.command()
+def notebook(
+    output: Path = typer.Argument(..., help="Notebook (.ipynb) path to write."),
+    data_file: Path = typer.Option(..., "--file", help="Data file to profile."),
+    target: str | None = typer.Option(None, "--target", "-t", help="Target column."),
+    time_col: str | None = typer.Option(None, "--time", help="Time column."),
+) -> None:
+    """Write a starter notebook scaffolded against a profile's action plan."""
+    console = Console()
+    prof = profile_fn(data_file, target=target, time_col=time_col)
+    pipeline_code = prof.to_sklearn_pipeline_code()
+    plan = prof.action_plan()
+    shortlist = (
+        [e.feature for e in prof.clusters.shortlist[:20]] if prof.clusters else []
+    )
+    split_detail = plan.split.detail if plan.split else "Random 80/20 holdout"
+    cv_detail = plan.cv.detail if plan.cv else "KFold(n_splits=5)"
+    class_detail = plan.class_strategy.detail if plan.class_strategy else None
+
+    notebook_json = _starter_notebook(
+        data_file=data_file,
+        target=target,
+        time_col=time_col,
+        pipeline_code=pipeline_code,
+        shortlist=shortlist,
+        split_detail=split_detail,
+        cv_detail=cv_detail,
+        class_detail=class_detail,
+    )
+    output = Path(output).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(notebook_json, encoding="utf-8")
+    console.print(f"[dim]Notebook:[/dim] {output}")
+
+
+def _starter_notebook(
+    *,
+    data_file: Path,
+    target: str | None,
+    time_col: str | None,
+    pipeline_code: str,
+    shortlist: list[str],
+    split_detail: str,
+    cv_detail: str,
+    class_detail: str | None,
+) -> str:
+    import json as _json
+
+    def code_cell(source: str) -> dict[str, Any]:
+        return {
+            "cell_type": "code",
+            "metadata": {},
+            "execution_count": None,
+            "outputs": [],
+            "source": source.splitlines(keepends=True),
+        }
+
+    def md_cell(source: str) -> dict[str, Any]:
+        return {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": source.splitlines(keepends=True),
+        }
+
+    target_repr = repr(target) if target else "None"
+    shortlist_repr = repr(shortlist)
+    extras = []
+    if class_detail:
+        extras.append(f"# Class strategy: {class_detail}")
+    extras_block = "\n".join(extras)
+
+    cells = [
+        md_cell(
+            f"# Starter notebook — {data_file.name}\n\n"
+            f"Generated by `biopsy notebook`. Target: `{target}`."
+        ),
+        code_cell(
+            "import pandas as pd\n"
+            "from sklearn.metrics import roc_auc_score, mean_absolute_error\n"
+            "from sklearn.linear_model import LogisticRegression\n"
+            "from sklearn.ensemble import GradientBoostingClassifier\n"
+            "from sklearn.pipeline import Pipeline\n"
+        ),
+        md_cell("## Load"),
+        code_cell(
+            f"DATA = {str(data_file)!r}\n"
+            f"TARGET = {target_repr}\n"
+            f"SHORTLIST = {shortlist_repr}\n"
+            f"df = pd.read_csv(DATA) if DATA.endswith('.csv') else pd.read_parquet(DATA)\n"
+            "df.head()\n"
+        ),
+        md_cell("## Preprocessor (from biopsy action plan)"),
+        code_cell(pipeline_code),
+        md_cell(
+            f"## Split\n\n{split_detail}\n\n## CV\n\n{cv_detail}\n"
+            + (f"\n{extras_block}\n" if extras_block else "")
+        ),
+        code_cell(
+            "from sklearn.model_selection import train_test_split\n\n"
+            "X = df.drop(columns=[TARGET]) if TARGET else df\n"
+            "y = df[TARGET] if TARGET else None\n"
+            "X_train, X_test, y_train, y_test = train_test_split(\n"
+            "    X, y, test_size=0.2, random_state=42, stratify=y if y is not None else None\n"
+            ")\n"
+        ),
+        md_cell("## Baseline model on the shortlist"),
+        code_cell(
+            "preproc = build_preprocessor()\n"
+            "pipe = Pipeline([\n"
+            "    ('preprocess', preproc),\n"
+            "    ('model', GradientBoostingClassifier(random_state=42)),\n"
+            "])\n"
+            "pipe.fit(X_train, y_train)\n"
+            "proba = pipe.predict_proba(X_test)[:, 1] if hasattr(pipe, 'predict_proba') else None\n"
+            "if proba is not None:\n"
+            "    print('AUC =', roc_auc_score(y_test, proba))\n"
+        ),
+    ]
+
+    notebook = {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    return _json.dumps(notebook, indent=1)
+
+
+@app.command()
+def doctor(
+    path: Path = typer.Argument(..., help="Data file to inspect."),
+    sample: int = typer.Option(5000, "--sample", min=100, help="Rows to scan for inference."),
+) -> None:
+    """Quick check: schema, candidate targets, candidate time columns.
+
+    Doesn't run the full profile — sub-2-seconds on most datasets.
+    """
+    console = Console(width=120)
+    src = load(path, sample=sample)
+    stats = compute_all(src)
+
+    from rich.panel import Panel
+    from rich.table import Table
+
+    head = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+    head.add_column("column", style="cyan", no_wrap=True)
+    head.add_column("dtype", style="dim")
+    head.add_column("kind", style="dim")
+    head.add_column("null", justify="right")
+    head.add_column("unique", justify="right")
+    head.add_column("looks like", style="yellow")
+    for s in stats.values():
+        looks: list[str] = []
+        if _looks_like_id(s.name):
+            looks.append("identifier")
+        if s.kind == "numeric" and s.n_unique <= 2:
+            looks.append("boolean")
+        if s.kind in {"text", "bool"} and 2 <= s.n_unique <= 20:
+            looks.append("low-card categorical")
+        if s.kind == "numeric" and 2 < s.n_unique <= 20:
+            looks.append("ordinal candidate target")
+        if s.kind == "temporal":
+            looks.append("time column candidate")
+        if s.null_rate >= 0.5:
+            looks.append("high-null")
+        head.add_row(
+            s.name, s.dtype.lower(), s.kind,
+            f"{s.null_rate:.0%}" if s.null_rate else "—",
+            f"{s.n_unique:,}",
+            ", ".join(looks),
+        )
+    console.print(
+        Panel(
+            head,
+            title=f"[bold]Doctor[/bold] · {path.name} · "
+                  f"{src.con.execute('SELECT COUNT(*) FROM data').fetchone()[0]:,} rows",
+            border_style="magenta",
+            padding=(0, 1),
+        )
+    )
+
+    targets = [n for n, s in stats.items() if s.kind in {"text", "bool"} and 2 <= s.n_unique <= 20]
+    times = [n for n, s in stats.items() if s.kind == "temporal" and s.n_unique > 10]
+    summary = []
+    if targets:
+        summary.append(f"target candidates: {', '.join(targets[:6])}")
+    if times:
+        summary.append(f"time candidates: {', '.join(times[:6])}")
+    if not summary:
+        summary.append("no obvious target/time candidates — pass --target/--time explicitly")
+    console.print("[dim]" + " · ".join(summary) + "[/dim]")
+
+
+@app.command()
+def diff(
+    a: Path = typer.Argument(..., help="Side A: saved profile JSON."),
+    b: Path = typer.Argument(..., help="Side B: saved profile JSON."),
+) -> None:
+    """Finding-level diff between two saved profiles."""
+    console = Console(width=120)
+    prof_a = load_profile(a)
+    prof_b = load_profile(b)
+    d = prof_a.diff(prof_b)
+    _print_diff(console, d)
 
 
 @app.command()
@@ -241,18 +533,218 @@ def init_config(
         console.print(f"[dim]Excludes:[/dim] {', '.join(excludes[:12])}")
 
 
+def _load_side(
+    path: Path,
+    label: str,
+    target: str | None,
+    time_col: str | None,
+    where: list[str],
+    sample: int | None,
+    show: Any,
+) -> Any:
+    """Either load a saved profile JSON or profile a data file in place."""
+    if path.suffix.lower() == ".json":
+        if show:
+            show(label, f"loading profile {path.name}")
+        return load_profile(path)
+    if show:
+        show(label, f"profiling {path.name}")
+
+    def cb(message: str) -> None:
+        if show:
+            show(label, message)
+
+    return profile_fn(
+        path,
+        target=target,
+        time_col=time_col,
+        where=where or None,
+        sample=sample,
+        progress=cb if show else None,
+    )
+
+
+def _print_compare(console: Console, report: Any) -> None:
+    """Curated terminal compare summary: schema diff, target delta,
+    top-10 drifted columns."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console.print(
+        Panel(
+            f"[bold]Compare[/bold] · {report.a_name} → {report.b_name}",
+            border_style="magenta",
+            padding=(0, 2),
+        )
+    )
+
+    schema = report.schema
+    if schema.added or schema.removed or schema.type_changed:
+        t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+        t.add_column("change", style="cyan")
+        t.add_column("columns", overflow="fold")
+        if schema.added:
+            t.add_row("added", ", ".join(schema.added))
+        if schema.removed:
+            t.add_row("removed", ", ".join(schema.removed))
+        if schema.type_changed:
+            t.add_row(
+                "type changed",
+                ", ".join(f"{c} ({a}→{b})" for c, a, b in schema.type_changed),
+            )
+        console.print(Panel(t, title="[bold]Schema diff[/bold]", border_style="bright_black"))
+    else:
+        console.print("[dim]Schema unchanged.[/dim]")
+
+    if report.target is not None:
+        console.print(
+            Panel(
+                f"[bold]Target Δ[/bold] · {report.target.detail}",
+                border_style="yellow",
+                padding=(0, 2),
+            )
+        )
+
+    t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+    t.add_column("column", style="cyan")
+    t.add_column("kind", style="dim")
+    t.add_column("KS", justify="right")
+    t.add_column("PSI", justify="right")
+    t.add_column("JS", justify="right")
+    t.add_column("null Δ", justify="right")
+    t.add_column("score", justify="right")
+    for d in report.top(10):
+        if d.drift_score <= 0:
+            continue
+        t.add_row(
+            d.column,
+            d.kind,
+            f"{d.ks_stat:.2f}" if d.ks_stat is not None else "—",
+            f"{d.psi:.2f}" if d.psi is not None else "—",
+            f"{d.js_divergence:.2f}" if d.js_divergence is not None else "—",
+            f"{d.null_rate_delta:+.0%}" if d.null_rate_delta is not None else "—",
+            f"{d.drift_score:.2f}",
+        )
+    console.print(Panel(t, title="[bold]Top drift[/bold]", border_style="bright_black"))
+
+    if report.findings:
+        f_table = Table(show_header=True, header_style="bold", border_style="bright_black",
+                        expand=True)
+        f_table.add_column("severity", style="dim")
+        f_table.add_column("title")
+        f_table.add_column("detail", overflow="fold")
+        for f in report.findings[:12]:
+            color = {"critical": "red", "warning": "yellow", "info": "cyan"}[f.severity]
+            f_table.add_row(f"[{color}]{f.severity}[/{color}]", f.title, f.detail)
+        console.print(Panel(f_table, title="[bold]Drift findings[/bold]",
+                            border_style="bright_black"))
+
+
+def _print_diff(console: Console, d: Any) -> None:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console.print(Panel(
+        f"[bold]Profile diff[/bold] · {d.a_name} → {d.b_name}",
+        border_style="magenta", padding=(0, 2),
+    ))
+    if d.is_empty():
+        console.print("[dim]No differences.[/dim]")
+        return
+
+    if d.schema_added or d.schema_removed:
+        t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+        t.add_column("change")
+        t.add_column("columns", overflow="fold")
+        if d.schema_added:
+            t.add_row("[green]+ added[/green]", ", ".join(d.schema_added))
+        if d.schema_removed:
+            t.add_row("[red]- removed[/red]", ", ".join(d.schema_removed))
+        console.print(Panel(t, title="[bold]Schema[/bold]", border_style="bright_black"))
+
+    def _findings_table(entries: list[Any], title: str, color: str) -> None:
+        if not entries:
+            return
+        t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+        t.add_column("severity", style="dim")
+        t.add_column("category", style="dim")
+        t.add_column("title", overflow="fold")
+        t.add_column("columns", overflow="fold", style="cyan")
+        for e in entries[:15]:
+            t.add_row(e.severity, e.category, e.title, ", ".join(e.columns))
+        if len(entries) > 15:
+            t.add_row("…", "", f"+{len(entries) - 15} more", "")
+        console.print(Panel(t, title=f"[{color}]{title}[/{color}]", border_style="bright_black"))
+
+    _findings_table(d.appeared, "Appeared", "yellow")
+    _findings_table(d.resolved, "Resolved", "green")
+
+    if d.severity_changed:
+        t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+        t.add_column("title", overflow="fold")
+        t.add_column("from→to")
+        t.add_column("columns", overflow="fold", style="cyan")
+        for sc in d.severity_changed[:15]:
+            t.add_row(sc.title, f"{sc.from_severity} → {sc.to_severity}", ", ".join(sc.columns))
+        console.print(Panel(t, title="[bold]Severity change[/bold]",
+                            border_style="bright_black"))
+
+    if d.rank_changed:
+        t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+        t.add_column("feature", style="cyan")
+        t.add_column("from rank", justify="right")
+        t.add_column("to rank", justify="right")
+        t.add_column("score Δ", justify="right")
+        for rc in d.rank_changed[:15]:
+            fr = rc.from_rank if rc.from_rank is not None else "—"
+            tr = rc.to_rank if rc.to_rank is not None else "—"
+            score_delta = "—"
+            if rc.from_score is not None and rc.to_score is not None:
+                score_delta = f"{(rc.to_score - rc.from_score):+.2f}"
+            t.add_row(rc.feature, str(fr), str(tr), score_delta)
+        console.print(Panel(t, title="[bold]Target-signal rank change[/bold]",
+                            border_style="bright_black"))
+
+
+_CONFIG_KNOWN_KEYS: frozenset[str] = frozenset({
+    "target", "time", "time_col", "exclude", "exclude_file", "ignore_missing_exclude",
+    "filter", "where", "sample", "target_sample", "shortlist", "cluster_cutoff",
+    "html", "save", "plotly_cdn", "fast", "deep", "all_columns", "bins",
+})
+
+
 def _load_cli_config(path: Path | None, profile_name: str | None) -> dict[str, Any]:
     if path is None:
         return {}
     data = tomllib.loads(path.expanduser().read_text())
-    cfg = {k: v for k, v in data.items() if k != "profiles"}
     profiles = data.get("profiles", {})
+    cfg = {k: v for k, v in data.items() if k != "profiles"}
+    _check_config_keys(cfg, path, where="top-level")
     if profile_name:
         selected = profiles.get(profile_name)
         if selected is None:
             raise typer.BadParameter(f"Profile '{profile_name}' not found in {path}.")
+        _check_config_keys(selected, path, where=f"[profiles.{profile_name}]")
         cfg.update(selected)
     return cfg
+
+
+def _check_config_keys(cfg: dict[str, Any], path: Path, *, where: str) -> None:
+    import difflib
+
+    unknown = sorted(set(cfg) - _CONFIG_KNOWN_KEYS)
+    if not unknown:
+        return
+    suggestions = []
+    for k in unknown:
+        match = difflib.get_close_matches(k, sorted(_CONFIG_KNOWN_KEYS), n=1, cutoff=0.6)
+        if match:
+            suggestions.append(f"'{k}' (did you mean '{match[0]}'?)")
+        else:
+            suggestions.append(f"'{k}'")
+    raise typer.BadParameter(
+        f"Unknown config key(s) in {path} {where}: {', '.join(suggestions)}."
+    )
 
 
 def _coalesce(cli_value: Any, config_value: Any, *aliases: Any) -> Any:

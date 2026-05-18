@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,6 +65,50 @@ class Finding:
 
 
 _NULL_SENTINELS: frozenset[str] = frozenset({"?", "NA", "N/A", "n/a", "nan", "NaN"})
+
+# ISO-8601-ish: YYYY-MM-DD or YYYY-MM-DDTHH:MM(:SS)?(Z|±HH:MM)?
+# Anchored at the start; trailing text (e.g. " event", " UTC") is tolerated
+# because DuckDB only keeps the column as VARCHAR when something prevents
+# auto-cast — that "something" is usually a suffix.
+_DATE_PATTERNS = [
+    _re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?"),
+    _re.compile(r"^\d{4}/\d{2}/\d{2}"),
+]
+
+
+def _looks_like_date_string(top_values: list[tuple[Any, int]]) -> bool:
+    """At least 80% of the top sampled distinct values match an ISO date."""
+    if not top_values:
+        return False
+    matched = 0
+    total = 0
+    for v, _c in top_values[:10]:
+        if v is None:
+            continue
+        s = str(v).strip()
+        total += 1
+        for pat in _DATE_PATTERNS:
+            if pat.match(s):
+                matched += 1
+                break
+    return total > 0 and (matched / total) >= 0.8
+
+
+def _values_are_bool_like(stats: ColumnStats) -> bool:
+    """All numeric top values are exactly 0 or 1 (as numeric or string)."""
+    if not stats.top_values:
+        # If we don't have top_values, fall back to min/max bracket.
+        if stats.min is not None and stats.max is not None:
+            return float(stats.min) >= 0.0 and float(stats.max) <= 1.0 and stats.n_unique <= 2
+        return False
+    for v, _c in stats.top_values:
+        try:
+            n = float(str(v))
+        except (TypeError, ValueError):
+            return False
+        if n not in (0.0, 1.0):
+            return False
+    return True
 
 
 def _looks_like_id(name: str) -> bool:
@@ -206,6 +251,80 @@ def column_findings(
                 columns=[s.name], score=0.7,
             ))
 
+        # free-text columns (long average length + near-unique values)
+        nonnull = s.n - s.n_null
+        if (
+            s.kind == "text"
+            and s.avg_len is not None
+            and s.avg_len > 32
+            and nonnull > 0
+            and (s.n_unique / nonnull) > 0.8
+            and not is_target
+        ):
+            out.append(Finding(
+                severity="info", category="suspicious",
+                title=f"`{s.name}` looks like free text (avg_len={s.avg_len:.0f})",
+                detail=(
+                    "Long, near-unique strings — drop, hash, or tokenize. Naive "
+                    "one-hot encoding will explode dimensionality."
+                ),
+                columns=[s.name], score=0.6,
+            ))
+
+        # date-string columns: text values that look like dates
+        if (
+            s.kind == "text"
+            and not is_target
+            and s.top_values
+            and _looks_like_date_string(s.top_values)
+        ):
+            out.append(Finding(
+                severity="warning", category="quality",
+                title=f"`{s.name}` is a date stored as a string",
+                detail=(
+                    "Top values match an ISO-8601-ish date pattern. Cast to "
+                    "DATE/TIMESTAMP before profiling so temporal checks fire."
+                ),
+                columns=[s.name], score=0.75,
+            ))
+
+        # bool-like integer columns: distinct values ⊆ {0, 1}
+        if (
+            s.kind == "numeric"
+            and not is_target
+            and s.n_unique <= 2
+            and s.n_unique >= 1
+            and _values_are_bool_like(s)
+        ):
+            out.append(Finding(
+                severity="info", category="quality",
+                title=f"`{s.name}` is a boolean stored as int",
+                detail=(
+                    "Only 0/1 values appear. Treat as a flag — no scaling, "
+                    "mode imputation, no skew transform."
+                ),
+                columns=[s.name], score=0.4,
+            ))
+
+        # high-cardinality categorical that may end up target-encoded
+        if (
+            s.kind in {"text", "bool"}
+            and not is_target
+            and target is not None
+            and nonnull > 0
+            and s.n_unique > 0.3 * nonnull
+            and s.n_unique > 30
+        ):
+            out.append(Finding(
+                severity="warning", category="quality",
+                title=f"`{s.name}` is high-cardinality — target encoding leakage risk",
+                detail=(
+                    f"{s.n_unique:,} unique levels over {nonnull:,} non-null rows. "
+                    "If you target-encode this, fit the encoder out-of-fold."
+                ),
+                columns=[s.name], score=0.6,
+            ))
+
     return out
 
 
@@ -305,6 +424,16 @@ def target_findings(signals: list[TargetSignal], target: str) -> list[Finding]:
                 detail="Notable predictive signal.",
                 columns=[s.feature, target], score=s.score,
             ))
+        if s.pps_stability is not None and s.pps_stability > 0.30 and s.score >= 0.05:
+            out.append(Finding(
+                severity="info", category="target",
+                title=f"`{s.feature}` PPS is unstable (CoV={s.pps_stability:.2f})",
+                detail=(
+                    "Multi-seed PPS varies a lot for this feature — the ranking "
+                    "may not be reliable. Consider holding out a larger sample."
+                ),
+                columns=[s.feature, target], score=0.4,
+            ))
     return out
 
 
@@ -327,9 +456,13 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
         if sig.severity == "none":
             continue
         score = sig.leak_gap or sig.drift_ks or sig.time_monotonicity or 0.0
+        # "Future-information" leakage: random PPS holds but the time split
+        # collapses. Reason string from `_classify()` carries that signature.
+        is_post_event = sig.severity == "critical" and "future information" in (sig.reason or "")
+        category = "leakage" if is_post_event else "temporal"
         out.append(Finding(
             severity=sig.severity,
-            category="temporal",
+            category=category,
             title=_temporal_title(sig),
             detail=sig.reason,
             columns=[sig.feature, report.time_column] + ([target] if target else []),
