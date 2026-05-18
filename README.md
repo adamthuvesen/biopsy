@@ -17,7 +17,10 @@ The CLI uses the same profiling engine:
 
 ```bash
 biopsy profile data.parquet --target label
+biopsy profile data.parquet --target label --deep
 biopsy profile data.parquet --target label --html report.html --open
+biopsy profile data.parquet --target label --save profile.json
+biopsy render profile.json --html report.html
 biopsy demo --rows 5000
 ```
 
@@ -29,7 +32,7 @@ biopsy demo --rows 5000
 
 - **Distributions** — histograms, skew, outliers, near-constant columns
 - **Data quality** — null rates, empty columns, identifiers, cardinality
-- **Target signal** — MI, PPS, Spearman, AUC, permutation importance
+- **Target signal** — MI, PPS, Spearman, raw AUC, AUC lift, optional permutation importance
 - **Redundancy** — Spearman-distance clustering with a feature shortlist
 - **Temporal leakage** — random-vs-time split gaps, monotonicity, target drift
 - **Correlations** — Pearson in DuckDB SQL and non-linear MI
@@ -82,6 +85,7 @@ signals = prof.target_signal_records()
 shortlist = prof.shortlist_records()
 payload = prof.to_dict()
 json_text = prof.to_json()
+prof.save("profile.json")
 ```
 
 Use notebook-friendly pandas frames when pandas is installed:
@@ -91,6 +95,12 @@ prof.findings_frame()
 prof.columns_frame()
 prof.target_signal_frame()
 prof.shortlist_frame()
+```
+
+In notebooks, the profile renders itself as HTML:
+
+```python
+profile(df, target="label").show()
 ```
 
 Use ML helpers for modeling decisions:
@@ -116,6 +126,8 @@ Pandas, Polars, and Arrow are optional dependencies. `biopsy` registers in-memor
 
 ```bash
 biopsy profile <file> [options]
+biopsy init <file>
+biopsy render profile.json --html report.html
 ```
 
 | Flag | Default | Description |
@@ -123,11 +135,19 @@ biopsy profile <file> [options]
 | `--target / -t COL` | — | Target column for predictive metrics |
 | `--time COL` | auto | Time column for temporal leakage |
 | `--exclude / -x COL` | — | Drop column from analysis |
+| `--exclude-file PATH` | — | Drop columns listed one-per-line |
+| `--ignore-missing-exclude` | off | Skip absent excluded columns for versioned datasets |
 | `--filter / -w EXPR` | — | Filter rows before profiling |
 | `--sample N` | — | Reservoir-sample N rows after filtering |
+| `--target-sample N` | `30000` | Target-metric sample size; stratified for rare classification targets |
+| `--fast / --deep` | `--fast` | Fast skips pairwise MI and target permutation; deep runs the full analysis |
+| `--all-columns` | off | Print the full terminal column table |
 | `--shortlist N` | — | Cap the feature shortlist |
 | `--cluster-cutoff X` | `0.30` | Cluster cutoff on `1-|rho|` |
 | `--html PATH` | — | Write an HTML report |
+| `--save PATH` | — | Save the reusable profile JSON artifact |
+| `--plotly-cdn` | off | Use Plotly from CDN instead of embedding it in the HTML |
+| `--config PATH` | — | TOML config with defaults; use `--profile-name` for `[profiles.NAME]` |
 | `--open` | — | Open the HTML report |
 | `--bins N` | `24` | Histogram bin count |
 
@@ -141,6 +161,34 @@ Filter expressions:
 ```
 
 Filters are ANDed and applied before sampling.
+
+Config files keep repeated project choices out of the shell:
+
+```toml
+target = "target"
+time = "snapshot_date"
+filter = ["segment in A,B,C"]
+exclude = ["account_key", "segment", "score_column"]
+ignore_missing_exclude = true
+fast = true
+
+[profiles.deep]
+fast = false
+plotly_cdn = true
+```
+
+```bash
+biopsy profile data.parquet --config biopsy.toml
+biopsy profile data.parquet --config biopsy.toml --profile-name deep --html report.html
+```
+
+Start a config from a real file:
+
+```bash
+biopsy init data.parquet
+biopsy profile data.parquet --config biopsy.toml --save profile.json
+biopsy render profile.json --html report.html
+```
 
 ## Development
 

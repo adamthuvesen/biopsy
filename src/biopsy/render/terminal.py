@@ -29,19 +29,27 @@ CATEGORY_LABEL = {
 }
 
 
-def render(prof: Profile, console: Console | None = None) -> None:
+def render(
+    prof: Profile,
+    console: Console | None = None,
+    *,
+    all_columns: bool = True,
+    max_columns: int = 30,
+) -> None:
     console = console or Console()
 
     console.print(_header(prof))
     if prof.findings:
         console.print(_findings_panel(prof))
-    console.print(_columns_table(prof))
     if prof.target_signals:
         console.print(_target_panel(prof))
     if prof.temporal is not None and prof.temporal.signals:
         console.print(_temporal_panel(prof))
+    elif prof.temporal is not None and prof.temporal.time_buckets:
+        console.print(_temporal_buckets_panel(prof))
     if prof.clusters is not None and prof.clusters.shortlist:
         console.print(_shortlist_panel(prof))
+    console.print(_columns_table(prof, all_columns=all_columns, max_columns=max_columns))
     if prof.correlations:
         console.print(_correlations_panel(prof))
     console.print(_footer(prof))
@@ -77,6 +85,7 @@ def _findings_panel(prof: Profile) -> Panel:
         icon = SEVERITY_ICON[f.severity]
         title = Text(f.title, style=style)
         detail = Text(f.detail or "", style="dim")
+        detail.append(f"\nwhy: {f.why}", style="dim italic")
         table.add_row(icon, title, detail)
         shown += 1
     remaining = len(prof.findings) - shown
@@ -96,7 +105,7 @@ def _spark_for(s: ColumnStats, width: int = 24) -> str:
     return sparkline(counts, width=width) if counts else ""
 
 
-def _columns_table(prof: Profile) -> Panel:
+def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Panel:
     t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
     t.add_column("column", style="cyan", no_wrap=True)
     t.add_column("type", style="dim")
@@ -105,7 +114,8 @@ def _columns_table(prof: Profile) -> Panel:
     t.add_column("distribution / top", overflow="fold")
     t.add_column("summary", overflow="fold")
 
-    for s in prof.columns.values():
+    columns = list(prof.columns.values()) if all_columns else _selected_columns(prof, max_columns)
+    for s in columns:
         null_str = _pct(s.null_rate)
         if s.null_rate > 0.5:
             null_str = f"[red]{null_str}[/red]"
@@ -134,7 +144,40 @@ def _columns_table(prof: Profile) -> Panel:
             summary,
         )
 
-    return Panel(t, title="[bold]Columns[/bold]", border_style="bright_black", padding=(0, 1))
+    title = "[bold]Columns[/bold]"
+    if not all_columns:
+        title = f"[bold]Columns · selected {len(columns)} of {prof.n_cols}[/bold]"
+    return Panel(t, title=title, border_style="bright_black", padding=(0, 1))
+
+
+def _selected_columns(prof: Profile, max_columns: int) -> list[ColumnStats]:
+    names: list[str] = []
+    for f in prof.findings[:20]:
+        names.extend(c for c in f.columns if c in prof.columns)
+    if prof.target:
+        names.append(prof.target)
+    for s in prof.target_signals[:10]:
+        names.append(s.feature)
+    if prof.clusters is not None:
+        names.extend(e.feature for e in prof.clusters.shortlist[:10])
+
+    seen: set[str] = set()
+    selected: list[ColumnStats] = []
+    for name in names:
+        if name in seen or name not in prof.columns:
+            continue
+        seen.add(name)
+        selected.append(prof.columns[name])
+        if len(selected) >= max_columns:
+            return selected
+
+    for name, stats in prof.columns.items():
+        if name in seen:
+            continue
+        selected.append(stats)
+        if len(selected) >= max_columns:
+            break
+    return selected
 
 
 def _numeric_summary(s: ColumnStats) -> str:
@@ -183,7 +226,9 @@ def _target_panel(prof: Profile) -> Panel:
     t.add_column("mi", justify="right")
     t.add_column("ρ", justify="right")
     t.add_column("auc", justify="right")
-    t.add_column("perm", justify="right")
+    t.add_column("auc lift", justify="right")
+    t.add_column("rel perm", justify="right")
+    t.add_column("n", justify="right")
     t.add_column("bar")
     t.add_column("note", style="dim")
 
@@ -198,8 +243,10 @@ def _target_panel(prof: Profile) -> Panel:
             f"{s.score:.2f}",
             f"{s.mutual_info:.2f}",
             _fmt_signed(s.spearman),
+            _fmt_unsigned(s.raw_auc),
             _fmt_unsigned(s.auc),
             _fmt_unsigned(s.perm_importance),
+            f"{s.support:,}" if s.support else "—",
             bar,
             note,
         )
@@ -248,6 +295,33 @@ def _temporal_panel(prof: Profile) -> Panel:
         t.add_row(s.feature, split, drift, mono, note)
 
     title = f"[bold]Temporal → [yellow]{report.time_column}[/yellow][/bold]"
+    return Panel(t, title=title, border_style="bright_black", padding=(0, 1))
+
+
+def _temporal_buckets_panel(prof: Profile) -> Panel:
+    report = prof.temporal
+    assert report is not None
+    t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
+    t.add_column("time", style="cyan")
+    t.add_column("rows", justify="right")
+    t.add_column("target n", justify="right")
+    t.add_column("target rate/mean", justify="right")
+
+    for b in report.time_buckets:
+        if b.target_rate is not None:
+            target_value = f"{b.target_rate:.2%}"
+        elif b.target_mean is not None:
+            target_value = _num(b.target_mean)
+        else:
+            target_value = "—"
+        t.add_row(
+            b.label,
+            f"{b.n_rows:,}",
+            f"{b.n_target:,}" if b.n_target is not None else "—",
+            target_value,
+        )
+
+    title = f"[bold]Temporal buckets → [yellow]{report.time_column}[/yellow][/bold]"
     return Panel(t, title=title, border_style="bright_black", padding=(0, 1))
 
 

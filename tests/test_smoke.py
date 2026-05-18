@@ -7,9 +7,11 @@ import json
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from biopsy.cli import app
 from biopsy.demo import synthetic_dataframe, write_demo_csv
-from biopsy.profile import profile
+from biopsy.profile import load_profile, profile
 from biopsy.render.html import render as render_html
 
 
@@ -243,6 +245,57 @@ def test_profile_ml_helpers_and_serialization(tmp_path: Path) -> None:
     assert prof.shortlist_records()
 
 
+def test_profile_save_load_and_repr_html(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
+    prof = profile(
+        csv,
+        target="churned",
+        deep_correlations=False,
+        target_permutation=False,
+    )
+
+    saved = prof.save(tmp_path / "profile.json")
+    loaded = load_profile(saved)
+
+    assert loaded.source_name == prof.source_name
+    assert loaded.source_path == prof.source_path
+    assert loaded.target == "churned"
+    assert loaded.columns.keys() == prof.columns.keys()
+    assert loaded.findings[0].why
+
+    html = loaded._repr_html_()
+    assert "<!doctype html>" in html
+    assert "biopsy" in html
+    assert "churned" in html
+
+
+def test_cli_init_and_render_saved_profile(tmp_path: Path) -> None:
+    runner = CliRunner()
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
+    config_path = tmp_path / "biopsy.toml"
+
+    init_result = runner.invoke(
+        app,
+        ["init", str(csv), "--output", str(config_path), "--sample", "800"],
+    )
+    assert init_result.exit_code == 0, init_result.output
+    config_text = config_path.read_text()
+    assert 'target = "churned"' in config_text
+    assert 'time = "signup_date"' in config_text
+    assert '"user_id"' in config_text
+
+    prof = profile(csv, target="churned", deep_correlations=False, target_permutation=False)
+    saved = prof.save(tmp_path / "profile.json")
+    report = tmp_path / "report.html"
+    render_result = runner.invoke(
+        app,
+        ["render", str(saved), "--html", str(report), "--plotly-cdn"],
+    )
+    assert render_result.exit_code == 0, render_result.output
+    assert report.exists()
+    assert '<script src="https://cdn.plot.ly' in report.read_text()
+
+
 def test_profile_pandas_frame_helpers(tmp_path: Path) -> None:
     pd = pytest.importorskip("pandas")
     csv = write_demo_csv(tmp_path / "demo.csv", n=1200)
@@ -291,6 +344,19 @@ def test_exclude_drops_columns(tmp_path: Path) -> None:
         if any(c in f.columns for c in ("status", "constant_col"))
     ]
     assert not excluded_findings
+
+
+def test_ignore_missing_exclude_skips_absent_columns(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=1000)
+    prof = profile(
+        csv,
+        target="churned",
+        exclude=["status", "does_not_exist"],
+        ignore_missing_exclude=True,
+    )
+
+    assert "status" not in prof.columns
+    assert "does_not_exist" not in prof.columns
 
 
 def test_filter_expression_reduces_rows(tmp_path: Path) -> None:
@@ -383,6 +449,32 @@ def test_target_signal_samples_after_target_filter(tmp_path: Path) -> None:
     assert signals, "target signals should use all 100 labeled rows after filtering"
 
 
+def test_target_signal_stratifies_rare_binary_targets(tmp_path: Path) -> None:
+    import csv as csv_module
+
+    from biopsy.correlations import target_signal
+    from biopsy.io import load
+    from biopsy.stats import compute_all
+
+    p = tmp_path / "rare_target.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "y"])
+        for i in range(5000):
+            y = 1 if i < 20 else 0
+            w.writerow([y, y])
+
+    src = load(p)
+    stats = compute_all(src)
+    stratified = target_signal(src, stats, "y", max_rows=100, include_permutation=False)
+    unstratified = target_signal(
+        src, stats, "y", max_rows=100, include_permutation=False, stratify=False,
+    )
+
+    assert stratified[0].positive_count == 20
+    assert (unstratified[0].positive_count or 0) < 20
+
+
 def test_temporal_samples_after_time_filter(tmp_path: Path) -> None:
     """Sparse timestamp coverage should not make temporal analysis vanish."""
     import csv as csv_module
@@ -405,6 +497,35 @@ def test_temporal_samples_after_time_filter(tmp_path: Path) -> None:
     report = temporal_signals(src, stats, "event_date", max_rows=1000)
     assert report is not None
     assert report.time_column == "event_date"
+
+
+def test_temporal_multiclass_pps_uses_actual_classes(tmp_path: Path) -> None:
+    """Multiclass temporal checks should not assume labels are encoded as 0/1."""
+    import csv as csv_module
+    from datetime import date, timedelta
+
+    p = tmp_path / "multiclass_time.csv"
+    start = date(2024, 1, 1)
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["event_date", "feature", "target"])
+        for i in range(2000):
+            if i < 20:
+                label = "a"
+            elif i < 40:
+                label = "b"
+            else:
+                label = "c" if i % 2 == 0 else "d"
+            w.writerow([start + timedelta(days=i), label, label])
+
+    prof = profile(p, target="target", time_col="event_date")
+
+    assert prof.temporal is not None
+    signal = next(s for s in prof.temporal.signals if s.feature == "feature")
+    assert signal.random_pps is not None
+    assert signal.time_pps is not None
+    assert signal.random_pps > 0.9
+    assert signal.time_pps > 0.9
 
 
 def test_h2_spearman_handles_ties() -> None:
@@ -496,6 +617,81 @@ def test_explicit_non_temporal_time_column_emits_info(tmp_path: Path) -> None:
     assert any("not temporal" in f.detail.lower() for f in temporal_findings)
 
 
+def test_low_cardinality_time_column_reports_target_buckets(tmp_path: Path) -> None:
+    import csv as csv_module
+
+    p = tmp_path / "quarterly.csv"
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["reporting_date", "x", "target"])
+        for q, rate in [
+            ("2025-01-01", 0.01),
+            ("2025-04-01", 0.02),
+            ("2025-07-01", 0.20),
+            ("2025-10-01", 0.25),
+        ]:
+            positives = int(300 * rate)
+            for i in range(300):
+                w.writerow([q, i, 1 if i < positives else 0])
+
+    prof = profile(p, target="target", time_col="reporting_date")
+
+    assert prof.temporal is not None
+    assert prof.temporal.signals == []
+    assert len(prof.temporal.time_buckets) == 4
+    assert prof.temporal.target_drift_kind == "binary"
+    assert prof.temporal.target_drift is not None
+    assert prof.temporal.target_drift >= 0.2
+    findings = [f for f in prof.findings if f.category == "temporal"]
+    assert any("target-by-period" in f.detail.lower() for f in findings)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"hist_bins": 0}, "hist_bins"),
+        ({"sample": -5}, "sample"),
+        ({"cluster_cutoff": -0.1}, "cluster_cutoff"),
+        ({"cluster_cutoff": 1.1}, "cluster_cutoff"),
+        ({"shortlist_size": -1}, "shortlist_size"),
+    ],
+)
+def test_profile_rejects_invalid_numeric_options(
+    tmp_path: Path,
+    kwargs: dict,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        profile(tmp_path / "missing.csv", **kwargs)
+
+
+def test_regression_diff_target_drift_surfaces(tmp_path: Path) -> None:
+    import csv as csv_module
+    from datetime import date, timedelta
+
+    p = tmp_path / "regression_diff_drift.csv"
+    start = date(2024, 1, 1)
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["event_date", "x", "target"])
+        for i in range(2000):
+            w.writerow([start + timedelta(days=i), i % 17, -1000 + i])
+
+    prof = profile(p, target="target", time_col="event_date")
+
+    assert prof.temporal is not None
+    assert prof.temporal.target_drift_kind == "regression_diff"
+    assert prof.temporal.target_drift is not None and prof.temporal.target_drift > 1000
+    assert prof.temporal.target_drift_score is not None
+    assert prof.temporal.target_drift_score >= 1.0
+    findings = [
+        f for f in prof.findings
+        if f.category == "temporal" and {"target", "event_date"}.issubset(f.columns)
+    ]
+    assert findings
+    assert "target spread" in findings[0].detail
+
+
 def test_m7_looks_like_id_no_false_positives() -> None:
     """M7: short words ending in 'id' (paid, liquid, valid) must not be flagged."""
     from biopsy.findings import _looks_like_id
@@ -520,3 +716,9 @@ def test_html_render(tmp_path: Path) -> None:
     assert "biopsy" in content
     assert "churned" in content
     assert "plotly" in content.lower()
+    assert '<script src="https://cdn.plot.ly' not in content
+    assert "plotly.js" in content.lower()
+
+    cdn_out = render_html(prof, tmp_path / "report-cdn.html", embed_plotly=False)
+    cdn_content = cdn_out.read_text()
+    assert '<script src="https://cdn.plot.ly' in cdn_content

@@ -11,7 +11,7 @@ When a dataset has a time column, profile features for:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.stats import ks_2samp
@@ -31,6 +31,7 @@ STRONG_DRIFT_KS = 0.5              # flag drift at info level even without PPS s
 MONOTONIC_THRESHOLD = 0.95
 TARGET_DRIFT_RATIO = 2.0
 TARGET_DRIFT_BINARY_DIFF = 0.2     # 20 percentage points
+TARGET_DRIFT_REGRESSION_DIFF_SCALE = 1.0  # mean range >= 1 target-IQR/std
 MIN_ROWS = 1000
 MIN_TIME_VALUES = 10
 TEST_FRACTION = 0.3
@@ -65,6 +66,17 @@ class TemporalReport:
     target_drift: float | None
     target_drift_kind: str | None
     insufficient: str | None       # reason for skipping per-feature analysis, if any
+    target_drift_score: float | None = None  # threshold-scale score; same units except diff
+    time_buckets: list[TimeBucket] = field(default_factory=list)
+
+
+@dataclass
+class TimeBucket:
+    label: str
+    n_rows: int
+    n_target: int | None = None
+    target_rate: float | None = None
+    target_mean: float | None = None
 
 
 # --- time column resolution ------------------------------------------------
@@ -117,12 +129,20 @@ def temporal_signals(
     if t_stats is None or t_stats.kind != "temporal":
         return None
     if t_stats.n_unique < MIN_TIME_VALUES:
+        buckets = _time_bucket_summary(src, stats, time_col, target)
+        target_drift, target_drift_kind, target_drift_score = _target_drift_from_buckets(
+            buckets, stats.get(target) if target else None,
+        )
         return TemporalReport(
             time_column=time_col, target=target, signals=[],
-            target_drift=None, target_drift_kind=None,
+            target_drift=target_drift,
+            target_drift_kind=target_drift_kind,
+            target_drift_score=target_drift_score,
+            time_buckets=buckets,
             insufficient=(
                 f"Only {t_stats.n_unique} distinct value(s) in `{time_col}` — "
-                f"need ≥{MIN_TIME_VALUES} for a meaningful time-ordered split."
+                f"need ≥{MIN_TIME_VALUES} for leakage-style time-ordered splits. "
+                "Target-by-period drift was still computed."
             ),
         )
 
@@ -147,7 +167,8 @@ def temporal_signals(
     if not features:
         return TemporalReport(
             time_column=time_col, target=target, signals=[],
-            target_drift=None, target_drift_kind=None,
+            target_drift=None, target_drift_kind=None, target_drift_score=None,
+            time_buckets=_time_bucket_summary(src, stats, time_col, target),
             insufficient="No eligible features for temporal analysis.",
         )
 
@@ -240,9 +261,9 @@ def temporal_signals(
                 s.reason = f"Time-monotonic, but `{time_col}` looks like ingest order."
 
     # Target drift
-    target_drift, target_drift_kind = _target_drift(
+    target_drift, target_drift_kind, target_drift_score = _target_drift(
         y_full, target_valid, target_kind, time_as_float,
-    ) if y_full is not None else (None, None)
+    ) if y_full is not None else (None, None, None)
 
     return TemporalReport(
         time_column=time_col,
@@ -250,6 +271,8 @@ def temporal_signals(
         signals=signals,
         target_drift=target_drift,
         target_drift_kind=target_drift_kind,
+        target_drift_score=target_drift_score,
+        time_buckets=_time_bucket_summary(src, stats, time_col, target),
         insufficient=None,
     )
 
@@ -319,7 +342,7 @@ def _analyze_feature(
         if (
             len(train_idx) >= 50
             and len(test_idx) >= 50
-            and _enough_test_positives(y_full[test_idx], target_kind)
+            and _enough_test_classes(y_full[test_idx], target_kind)
         ):
             time_pps = pps(
                 x_enc.reshape(-1, 1), y_full, target_kind,
@@ -332,7 +355,7 @@ def _analyze_feature(
         if (
             len(rand_train) >= 50
             and len(rand_test) >= 50
-            and _enough_test_positives(y_full[rand_test], target_kind)
+            and _enough_test_classes(y_full[rand_test], target_kind)
         ):
             random_pps = pps(
                 x_enc.reshape(-1, 1), y_full, target_kind,
@@ -409,13 +432,15 @@ def _classify(
     return "none", ""
 
 
-def _enough_test_positives(y: np.ndarray, target_kind: str) -> bool:
+def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
     if target_kind != "classification":
         return True
-    return (
-        int((y == 1).sum()) >= MIN_TEST_POSITIVES_CLASSIF
-        or int((y == 0).sum()) >= MIN_TEST_POSITIVES_CLASSIF
-    )
+    classes, counts = np.unique(y, return_counts=True)
+    if len(classes) < 2:
+        return False
+    if len(classes) == 2:
+        return bool(np.any(counts >= MIN_TEST_POSITIVES_CLASSIF))
+    return len(y) >= MIN_TEST_POSITIVES_CLASSIF
 
 
 # --- helpers ---------------------------------------------------------------
@@ -461,26 +486,143 @@ def _drift_stat(early: np.ndarray, late: np.ndarray, kind: str) -> float | None:
     return float(0.5 * np.abs(e_freq - l_freq).sum())
 
 
+def _time_bucket_summary(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    time_col: str,
+    target: str | None,
+) -> list[TimeBucket]:
+    qtime = _quote(time_col)
+    if target is None or target not in stats:
+        rows = src.con.execute(f"""
+            SELECT {qtime}::VARCHAR AS bucket, COUNT(*) AS n_rows
+            FROM data
+            WHERE {qtime} IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+        """).fetchall()
+        return [TimeBucket(label=str(label), n_rows=int(n_rows)) for label, n_rows in rows]
+
+    t_stats = stats[target]
+    qtarget = _quote(target)
+    target_kind = _target_kind(t_stats)
+    if target_kind == "classification":
+        positive_value = src.con.execute(f"""
+            SELECT {qtarget}::VARCHAR
+            FROM data
+            WHERE {qtarget} IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1 DESC
+            LIMIT 1
+        """).fetchone()
+        if positive_value is None:
+            return []
+        pos = str(positive_value[0]).replace("'", "''")
+        rows = src.con.execute(f"""
+            SELECT
+                {qtime}::VARCHAR AS bucket,
+                COUNT(*) AS n_rows,
+                COUNT({qtarget}) AS n_target,
+                AVG(
+                    CASE
+                        WHEN {qtarget} IS NULL THEN NULL
+                        WHEN {qtarget}::VARCHAR = '{pos}' THEN 1.0
+                        ELSE 0.0
+                    END
+                ) AS target_rate
+            FROM data
+            WHERE {qtime} IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+        """).fetchall()
+        return [
+            TimeBucket(
+                label=str(label),
+                n_rows=int(n_rows),
+                n_target=int(n_target),
+                target_rate=float(target_rate) if target_rate is not None else None,
+            )
+            for label, n_rows, n_target, target_rate in rows
+        ]
+
+    rows = src.con.execute(f"""
+        SELECT
+            {qtime}::VARCHAR AS bucket,
+            COUNT(*) AS n_rows,
+            COUNT({qtarget}) AS n_target,
+            AVG({qtarget}::DOUBLE) AS target_mean
+        FROM data
+        WHERE {qtime} IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1
+    """).fetchall()
+    return [
+        TimeBucket(
+            label=str(label),
+            n_rows=int(n_rows),
+            n_target=int(n_target),
+            target_mean=float(target_mean) if target_mean is not None else None,
+        )
+        for label, n_rows, n_target, target_mean in rows
+    ]
+
+
+def _target_kind(stats: ColumnStats) -> str:
+    return (
+        "classification" if (
+            stats.kind in {"text", "bool"} or
+            (stats.kind == "numeric" and stats.n_unique <= 20)
+        ) else "regression"
+    )
+
+
+def _target_drift_from_buckets(
+    buckets: list[TimeBucket],
+    target_stats: ColumnStats | None,
+) -> tuple[float | None, str | None, float | None]:
+    if target_stats is None or len(buckets) < 2:
+        return None, None, None
+    kind = _target_kind(target_stats)
+    if kind == "classification":
+        rates = [b.target_rate for b in buckets if b.target_rate is not None]
+        if len(rates) < 2:
+            return None, None, None
+        drift = float(max(rates) - min(rates))
+        drift_kind = "binary" if target_stats.n_unique == 2 else "multiclass"
+        return drift, drift_kind, drift
+
+    means = [b.target_mean for b in buckets if b.target_mean is not None]
+    if len(means) < 2:
+        return None, None, None
+    if min(means) > 0:
+        drift = float(max(means) / min(means))
+        return drift, "regression_ratio", drift
+    diff = float(max(means) - min(means))
+    return diff, "regression_diff", None
+
+
 def _target_drift(
     y_full: np.ndarray | None,
     target_valid: np.ndarray | None,
     target_kind: str | None,
     time_as_float: np.ndarray,
-) -> tuple[float | None, str | None]:
+) -> tuple[float | None, str | None, float | None]:
     """Drift across time deciles, with the kind label honest about its units.
 
-    Returns:
+    Returns (drift, kind, threshold_score):
       ("binary",            max_rate - min_rate)    — only for 2-class targets
       ("regression_ratio",  max_mean / min_mean)    — strictly-positive regression targets
       ("regression_diff",   max_mean - min_mean)    — regression targets that can be ≤ 0
       ("multiclass",        max_class_rate_drift)   — for K>2 classification: maximum
                                                        per-class rate range across deciles
+    For regression_diff, threshold_score is the mean range scaled by target IQR
+    (or standard deviation if IQR is zero).
     """
     if y_full is None or target_valid is None or target_kind is None:
-        return None, None
+        return None, None, None
     mask = target_valid & ~np.isnan(time_as_float)
     if mask.sum() < 100:
-        return None, None
+        return None, None, None
     y = y_full[mask]
     t = time_as_float[mask]
     order = np.argsort(t)
@@ -489,7 +631,7 @@ def _target_drift(
     # split rows into 10 chronological deciles
     deciles = [d for d in np.array_split(y_sorted, 10) if len(d) > 0]
     if len(deciles) < 5:
-        return None, None
+        return None, None, None
 
     if target_kind == "classification":
         unique_classes = np.unique(y)
@@ -497,19 +639,33 @@ def _target_drift(
             # treat 1 as positive class regardless of label encoding
             pos = unique_classes.max()
             rates = np.array([(d == pos).mean() for d in deciles])
-            return float(rates.max() - rates.min()), "binary"
+            drift = float(rates.max() - rates.min())
+            return drift, "binary", drift
         # multi-class: per-class positive-rate range across deciles; report max
         max_drift = 0.0
         for c in unique_classes:
             rates = np.array([(d == c).mean() for d in deciles])
             max_drift = max(max_drift, float(rates.max() - rates.min()))
-        return max_drift, "multiclass"
+        return max_drift, "multiclass", max_drift
 
     # regression
     means = np.array([float(d.astype(np.float64).mean()) for d in deciles])
     if means.min() > 0:
-        return float(means.max() / means.min()), "regression_ratio"
-    return float(means.max() - means.min()), "regression_diff"
+        drift = float(means.max() / means.min())
+        return drift, "regression_ratio", drift
+    diff = float(means.max() - means.min())
+    scale = _target_scale(y.astype(np.float64))
+    score = diff / scale if scale > 0 else 0.0
+    return diff, "regression_diff", score
+
+
+def _target_scale(y: np.ndarray) -> float:
+    q25, q75 = np.percentile(y, [25, 75])
+    iqr = float(q75 - q25)
+    if iqr > 0:
+        return iqr
+    std = float(np.std(y))
+    return std if std > 0 else 0.0
 
 
 def is_target_drifted(report: TemporalReport) -> bool:
@@ -523,7 +679,6 @@ def is_target_drifted(report: TemporalReport) -> bool:
         return report.target_drift >= TARGET_DRIFT_BINARY_DIFF
     if kind == "regression_ratio":
         return report.target_drift >= TARGET_DRIFT_RATIO
-    # regression_diff: scale-dependent, so we can't apply a universal threshold;
-    # surface only when the difference is large in absolute terms relative to
-    # the data — for v1, do not auto-flag (caller decides).
+    if kind == "regression_diff":
+        return (report.target_drift_score or 0.0) >= TARGET_DRIFT_REGRESSION_DIFF_SCALE
     return False

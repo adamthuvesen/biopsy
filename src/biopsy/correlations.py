@@ -17,6 +17,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from biopsy.io import Source
+from biopsy.matrix import SampleCache
 from biopsy.stats import ColumnStats, _quote
 
 
@@ -91,6 +92,7 @@ def mutual_info_matrix(
     src: Source,
     stats: dict[str, ColumnStats],
     max_rows: int = 20_000,
+    sample_cache: SampleCache | None = None,
 ) -> dict[tuple[str, str], float]:
     """Pairwise mutual information for numeric + low-cardinality categorical columns.
 
@@ -105,13 +107,18 @@ def mutual_info_matrix(
     if len(eligible) < 2:
         return {}
 
-    quoted = ", ".join(_quote(c) for c in eligible)
-    sample = src.con.execute(
-        f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-    ).fetchall()
-    if not sample:
+    if sample_cache is None:
+        quoted = ", ".join(_quote(c) for c in eligible)
+        sample = src.con.execute(
+            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+        ).fetchall()
+        if not sample:
+            return {}
+        raw = np.array(sample, dtype=object)
+    else:
+        _cols, raw = sample_cache.fetch(eligible, max_rows=max_rows)
+    if raw.size == 0:
         return {}
-    raw = np.array(sample, dtype=object)
     masks = [_valid_mask(raw[:, j]) for j in range(len(eligible))]
 
     pairs: dict[tuple[str, str], float] = {}
@@ -143,10 +150,17 @@ def mutual_info_matrix(
 
 
 def correlation_pairs(
-    src: Source, stats: dict[str, ColumnStats]
+    src: Source,
+    stats: dict[str, ColumnStats],
+    *,
+    include_mutual_info: bool = True,
+    sample_cache: SampleCache | None = None,
 ) -> list[CorrelationPair]:
     pearson = pearson_matrix(src, stats)
-    mi = mutual_info_matrix(src, stats)
+    mi = (
+        mutual_info_matrix(src, stats, sample_cache=sample_cache)
+        if include_mutual_info else {}
+    )
 
     keys = set(pearson) | set(mi)
     out = [
@@ -164,8 +178,11 @@ class TargetSignal:
     mutual_info: float                  # MI-normalized score, [0, 1]
     method: str                         # "pps_classif" | "pps_regress"
     spearman: float | None = None       # signed rank correlation, [-1, 1]
-    auc: float | None = None            # normalized 2·|AUC−0.5|, binary classif only, [0, 1]
-    perm_importance: float | None = None  # multivariate, normalized [0, 1]
+    auc: float | None = None            # AUC lift: normalized 2·|AUC−0.5|, binary only
+    raw_auc: float | None = None        # raw ROC-AUC, binary classif only, [0, 1]
+    perm_importance: float | None = None  # relative multivariate permutation importance
+    support: int = 0
+    positive_count: int | None = None
     is_leak_suspect: bool = False
 
     @property
@@ -314,11 +331,12 @@ def _spearman(x: np.ndarray, y: np.ndarray) -> float | None:
     return rho
 
 
-def _normalized_auc(y: np.ndarray, score: np.ndarray) -> float | None:
-    """AUC normalized so 0 = no signal, 1 = perfect."""
+def _auc_scores(y: np.ndarray, score: np.ndarray) -> tuple[float, float] | None:
+    """Return (raw_auc, auc_lift). AUC lift normalizes so 0 = no signal, 1 = perfect."""
     if len(np.unique(y)) != 2:
         return None
-    return float(2 * abs(roc_auc_score(y, score) - 0.5))
+    raw = float(roc_auc_score(y, score))
+    return raw, float(2 * abs(raw - 0.5))
 
 
 def target_signal(
@@ -326,6 +344,9 @@ def target_signal(
     stats: dict[str, ColumnStats],
     target: str,
     max_rows: int = 30_000,
+    *,
+    include_permutation: bool = True,
+    stratify: bool = True,
 ) -> list[TargetSignal]:
     """Rank features by association with the target.
 
@@ -350,11 +371,15 @@ def target_signal(
         return []
 
     quoted = ", ".join(_quote(c) for c in features + [target])
-    sample = src.con.execute(
-        f"SELECT {quoted} FROM ("
-        f"SELECT {quoted} FROM data WHERE {_quote(target)} IS NOT NULL"
-        f") USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-    ).fetchall()
+    sample = _target_sample(
+        src=src,
+        quoted=quoted,
+        target=target,
+        target_kind=target_kind,
+        n_unique=t_stats.n_unique,
+        max_rows=max_rows,
+        stratify=stratify,
+    )
     if len(sample) < 30:
         return []
     raw = np.array(sample, dtype=object)
@@ -410,19 +435,27 @@ def target_signal(
             spearman = _spearman(x_enc, y_sub.astype(np.float64))
 
         # AUC: only binary classification target
-        auc = _normalized_auc(y_sub.astype(int), x_enc) if is_binary_target else None
+        raw_auc = None
+        auc = None
+        if is_binary_target:
+            auc_pair = _auc_scores(y_sub.astype(int), x_enc)
+            if auc_pair is not None:
+                raw_auc, auc = auc_pair
 
         signals.append(TargetSignal(
             feature=feat, score=pps_score, mutual_info=mi_norm, method=method,
-            spearman=spearman, auc=auc,
+            spearman=spearman, auc=auc, raw_auc=raw_auc,
+            support=int(feat_mask.sum()),
+            positive_count=int(y_sub.astype(int).sum()) if is_binary_target else None,
         ))
         feat_records.append((feat, x_enc, x_disc, feat_mask))
 
-    # Multivariate permutation importance from a single RF fit on the intersection
-    # of rows where every feature is valid. Skipped if too few rows survive.
-    _attach_permutation_importance(
-        signals, feat_records, y_full, target_mask, target_kind,
-    )
+    if include_permutation:
+        # Multivariate permutation importance from a single RF fit on the intersection
+        # of rows where every feature is valid. Skipped if too few rows survive.
+        _attach_permutation_importance(
+            signals, feat_records, y_full, target_mask, target_kind,
+        )
 
     # If PPS is degenerate across the board (e.g., extreme class imbalance makes
     # naive baseline unbeatable), fall back to best-available-metric ranking so
@@ -445,6 +478,48 @@ def target_signal(
         ):
             s.is_leak_suspect = True
     return signals
+
+
+def _target_sample(
+    src: Source,
+    quoted: str,
+    target: str,
+    target_kind: str,
+    n_unique: int,
+    max_rows: int,
+    stratify: bool,
+) -> list[tuple]:
+    """Pull target-analysis rows.
+
+    For low-cardinality classification targets, use deterministic per-class
+    sampling so rare positives do not disappear from the analysis sample.
+    """
+    qtarget = _quote(target)
+    if stratify and target_kind == "classification" and 1 < n_unique <= 20:
+        per_class = max(1, max_rows // n_unique)
+        return src.con.execute(f"""
+            WITH labeled AS (
+                SELECT row_number() OVER () AS __biopsy_rowid, {quoted}
+                FROM data
+                WHERE {qtarget} IS NOT NULL
+            ),
+            ranked AS (
+                SELECT *,
+                       row_number() OVER (
+                           PARTITION BY {qtarget}
+                           ORDER BY hash(__biopsy_rowid)
+                       ) AS __biopsy_rank
+                FROM labeled
+            )
+            SELECT {quoted}
+            FROM ranked
+            WHERE __biopsy_rank <= {int(per_class)}
+        """).fetchall()
+    return src.con.execute(
+        f"SELECT {quoted} FROM ("
+        f"SELECT {quoted} FROM data WHERE {qtarget} IS NOT NULL"
+        f") USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+    ).fetchall()
 
 
 def _attach_permutation_importance(

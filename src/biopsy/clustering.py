@@ -20,6 +20,7 @@ from scipy.spatial.distance import squareform
 
 from biopsy.correlations import TargetSignal, _valid_mask
 from biopsy.io import Source
+from biopsy.matrix import SampleCache
 from biopsy.stats import ColumnStats, _quote
 
 DEFAULT_CUTOFF = 0.30          # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
@@ -79,19 +80,24 @@ def _spearman_distance_matrix(
     src: Source,
     feature_names: list[str],
     max_rows: int = 20_000,
+    sample_cache: SampleCache | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Return (distance matrix, ordered feature names). Distance = 1 − |ρ|."""
     if len(feature_names) < 2:
         return np.empty((0, 0)), feature_names
 
-    quoted = ", ".join(_quote(c) for c in feature_names)
-    sample = src.con.execute(
-        f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-    ).fetchall()
-    if not sample:
+    if sample_cache is None:
+        quoted = ", ".join(_quote(c) for c in feature_names)
+        sample = src.con.execute(
+            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+        ).fetchall()
+        if not sample:
+            return np.empty((0, 0)), feature_names
+        raw = np.array(sample, dtype=object)
+    else:
+        _cols, raw = sample_cache.fetch(feature_names, max_rows=max_rows)
+    if raw.size == 0:
         return np.empty((0, 0)), feature_names
-
-    raw = np.array(sample, dtype=object)
     n = len(feature_names)
 
     # median-impute missing per column, then rank-transform
@@ -251,10 +257,12 @@ def _is_weak(score: float, method: str) -> bool:
 
 def _rationale(cl: Cluster, score: float, method: str) -> str:
     if cl.is_singleton:
-        return f"Singleton; {method}={score:.2f}."
+        if method == "no_target":
+            return "Only feature in this cluster; kept for coverage."
+        return f"Only feature in this cluster; ranked by {method}={score:.2f}."
     return (
-        f"Best of {cl.size}-member cluster (mean |ρ|={cl.mean_abs_correlation:.2f}); "
-        f"{method}={score:.2f}."
+        f"Best target-aware representative among {cl.size} correlated features "
+        f"(mean |ρ|={cl.mean_abs_correlation:.2f}); ranked by {method}={score:.2f}."
     )
 
 
@@ -266,6 +274,7 @@ def cluster_features(
     cutoff: float = DEFAULT_CUTOFF,
     max_rows: int = 20_000,
     max_shortlist: int | None = None,
+    sample_cache: SampleCache | None = None,
 ) -> ClusterReport:
     """Run clustering + shortlist on numeric features.
 
@@ -280,7 +289,9 @@ def cluster_features(
     if len(eligible) < 2:
         return ClusterReport(clusters=[], shortlist=[], cutoff=cutoff, n_features=len(eligible))
 
-    distance, kept = _spearman_distance_matrix(src, eligible, max_rows=max_rows)
+    distance, kept = _spearman_distance_matrix(
+        src, eligible, max_rows=max_rows, sample_cache=sample_cache
+    )
     if distance.size == 0:
         return ClusterReport(clusters=[], shortlist=[], cutoff=cutoff, n_features=len(eligible))
 

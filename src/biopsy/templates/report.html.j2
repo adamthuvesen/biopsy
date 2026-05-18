@@ -1,504 +1,1448 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>biopsy · {{ prof.source_name }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+{% if plotly_js %}
+<script>{{ plotly_js|safe }}</script>
+{% else %}
 <script src="{{ plotly_cdn }}" charset="utf-8"></script>
+{% endif %}
 <style>
   :root {
-    --ink: {{ palette.ink }};
-    --ink-2: {{ palette.ink_2 }};
-    --ink-3: {{ palette.ink_3 }};
-    --surface: {{ palette.surface }};
-    --surface-2: {{ palette.surface_2 }};
-    --line: {{ palette.line }};
-    --accent: {{ palette.accent }};
-    --accent-soft: {{ palette.accent_soft }};
-    --warn: {{ palette.warn }};
-    --crit: {{ palette.crit }};
-    --ok: {{ palette.ok }};
-    --radius: 10px;
-    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.06);
+    /* light: cream paper / warm ink */
+    --ink:        {{ palette.ink }};
+    --ink-2:      {{ palette.ink_2 }};
+    --ink-3:      {{ palette.ink_3 }};
+    --ink-4:      {{ palette.ink_4 }};
+    --surface:    {{ palette.surface }};
+    --surface-2:  {{ palette.surface_2 }};
+    --card:       #FFFCF6;
+    --line:       {{ palette.line }};
+    --line-2:     {{ palette.line_2 }};
+    --accent:     {{ palette.accent }};
+    --accent-soft:{{ palette.accent_soft }};
+    --accent-deep:{{ palette.accent_deep }};
+    --warn:       {{ palette.warn }};
+    --crit:       {{ palette.crit }};
+    --ok:         {{ palette.ok }};
+    --radius:     2px;
+    --radius-lg:  4px;
+    --shadow:     0 1px 0 rgba(28,25,23,.04);
+    --shadow-lg:  0 1px 0 rgba(28,25,23,.06), 0 12px 28px -16px rgba(28,25,23,.18);
+
+    /* fonts */
+    --font-display: "Instrument Serif", "Cormorant Garamond", "Georgia", serif;
+    --font-body:    "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
+  [data-theme="dark"] {
+    --ink:        {{ palette.dark_ink }};
+    --ink-2:      #D9D2C5;
+    --ink-3:      #968F82;
+    --ink-4:      #6E6859;
+    --surface:    {{ palette.dark_surface }};
+    --surface-2:  #221E1A;
+    --card:       #221E1A;
+    --line:       {{ palette.dark_line }};
+    --line-2:     #4D453C;
+    --accent:     #E07A4F;
+    --accent-soft:#2A1A12;
+    --accent-deep:#F4A07A;
+    --warn:       #D9A04B;
+    --crit:       #E25A77;
+    --ok:         #6CB47F;
+  }
+
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
     background: var(--surface);
     color: var(--ink);
-    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
+    font-family: var(--font-body);
+    font-size: 14.5px;
+    line-height: 1.55;
+    font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
   }
+  body {
+    background-image:
+      radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 38%),
+      radial-gradient(circle at 90% 10%, color-mix(in srgb, var(--accent) 3%, transparent), transparent 40%);
+    background-repeat: no-repeat;
+  }
+
+  ::selection { background: var(--accent); color: var(--surface); }
+  a { color: var(--ink); text-decoration: none; }
+  a:hover { color: var(--accent); }
+
+  /* ------------------------------------------------------------------ Top bar */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 18px;
+    padding: 10px 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .topbar .mark {
+    font-family: var(--font-display);
+    font-style: italic; font-size: 22px;
+    line-height: 1; letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  .topbar .mark::after {
+    content: " biopsy";
+    font-family: var(--font-body); font-style: normal;
+    font-size: 13px; font-weight: 600;
+    letter-spacing: -0.01em; color: var(--ink);
+    margin-left: 4px;
+  }
+  .topbar .file {
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--ink-3); flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .topbar .tally { display: flex; gap: 6px; align-items: center; }
+  .topbar .tally .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px;
+    font-family: var(--font-mono); font-size: 11px;
+    border: 1px solid var(--line); border-radius: 100px;
+    background: var(--card); color: var(--ink-2);
+    cursor: pointer; transition: all .15s ease;
+  }
+  .topbar .tally .pill:hover { border-color: var(--ink-3); }
+  .topbar .tally .pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+  }
+  .topbar .tally .pill.crit .dot { background: var(--crit); }
+  .topbar .tally .pill.warn .dot { background: var(--warn); }
+  .topbar .tally .pill.info .dot { background: var(--ink-3); }
+  .topbar .theme-toggle {
+    background: none; border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 4px 10px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-2); cursor: pointer;
+    transition: all .15s ease;
+  }
+  .topbar .theme-toggle:hover { border-color: var(--ink-3); color: var(--ink); }
+
+  /* ------------------------------------------------------------------ Layout */
   .layout {
     display: grid;
-    grid-template-columns: 240px 1fr;
-    min-height: 100vh;
+    grid-template-columns: 220px 1fr;
+    max-width: 1480px;
+    margin: 0 auto;
   }
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.side { display: none; }
+    main { padding: 32px 22px 80px !important; }
+  }
+
   nav.side {
-    background: white;
-    border-right: 1px solid var(--line);
-    padding: 32px 24px;
-    position: sticky; top: 0;
-    height: 100vh;
+    padding: 56px 24px 32px;
+    position: sticky; top: 50px;
+    align-self: start;
+    max-height: calc(100vh - 50px);
     overflow-y: auto;
+    font-size: 13px;
   }
-  nav.side .brand {
-    font-weight: 700;
-    font-size: 18px;
-    letter-spacing: -0.01em;
-    margin-bottom: 4px;
+  nav.side .group {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-4);
+    margin: 22px 0 8px;
   }
-  nav.side .brand .dot { color: var(--accent); }
-  nav.side .file {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11px;
-    color: var(--ink-3);
-    word-break: break-all;
-    margin-bottom: 28px;
-  }
+  nav.side .group:first-child { margin-top: 0; }
   nav.side a {
-    display: block;
-    padding: 7px 10px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 5px 10px;
     margin: 0 -10px;
     color: var(--ink-2);
     text-decoration: none;
-    border-radius: 6px;
-    font-size: 13px;
+    border-radius: var(--radius);
+    border-left: 1px solid transparent;
+    transition: all .15s ease;
   }
-  nav.side a:hover { background: var(--surface-2); color: var(--ink); }
-  nav.side a .count { color: var(--ink-3); font-size: 11px; margin-left: 4px; }
-  nav.side .group-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ink-3);
-    margin: 20px 0 6px;
-    font-weight: 600;
+  nav.side a:hover { color: var(--accent); background: var(--accent-soft); }
+  nav.side a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  nav.side a .count {
+    font-family: var(--font-mono);
+    color: var(--ink-4); font-size: 11px;
+  }
+  nav.side .legend {
+    margin-top: 28px;
+    padding: 12px 14px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    font-size: 11px; color: var(--ink-3);
+    line-height: 1.7;
+  }
+  nav.side .legend .row { display: flex; align-items: center; gap: 8px; }
+  nav.side .legend .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    display: inline-block;
   }
 
-  main { padding: 40px 56px 80px; max-width: 1280px; }
-  h1 {
-    font-size: 28px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    margin: 0 0 4px;
+  main {
+    padding: 56px 56px 80px;
+    max-width: 1180px;
+    width: 100%;
   }
-  h2 {
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin: 56px 0 16px;
+
+  /* ------------------------------------------------------------------ Hero */
+  .hero {
+    margin-bottom: 56px;
+    animation: rise .7s cubic-bezier(.2,.7,.2,1) both;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .hero .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--ink-3);
+    margin-bottom: 8px;
+  }
+  .hero .eyebrow .sep {
+    color: var(--line-2); margin: 0 8px;
+  }
+  .hero h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(40px, 5.5vw, 72px);
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+    margin: 0;
     color: var(--ink);
   }
-  h2 .count { color: var(--ink-3); font-weight: 400; margin-left: 6px; font-size: 14px; }
-  .hero-meta {
-    display: flex; gap: 28px; margin-top: 14px; flex-wrap: wrap;
-    color: var(--ink-3); font-size: 13px;
+  .hero h1 em {
+    font-style: italic;
+    color: var(--accent);
   }
-  .hero-meta b {
-    color: var(--ink); font-variant-numeric: tabular-nums;
-    font-weight: 600; margin-right: 4px;
+  .hero .subtitle {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--ink-3);
+    margin-top: 12px;
+    line-height: 1.4;
+    max-width: 720px;
   }
-  .hero-meta .target b { color: var(--accent); }
 
-  .findings { display: flex; flex-direction: column; gap: 8px; }
+  /* ------------------------------------------------------------------ Vitals */
+  .vitals {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0;
+    margin-top: 42px;
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--line);
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+  @media (max-width: 880px) {
+    .vitals { grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  }
+  .vital {
+    padding: 0 22px;
+    border-right: 1px solid var(--line);
+  }
+  .vital:last-child { border-right: none; }
+  .vital:first-child { padding-left: 0; }
+  .vital .label {
+    font-family: var(--font-mono);
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.14em; color: var(--ink-3);
+    margin-bottom: 4px;
+  }
+  .vital .value {
+    font-family: var(--font-display);
+    font-size: 38px; line-height: 1;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums oldstyle-nums;
+    font-feature-settings: "tnum", "onum";
+  }
+  .vital .unit {
+    font-family: var(--font-body); font-size: 14px;
+    color: var(--ink-3); margin-left: 4px;
+    font-weight: 400;
+  }
+  .vital.score .value { color: var(--accent); }
+  .vital.score.fair .value { color: var(--warn); }
+  .vital.score.critical .value { color: var(--crit); }
+  .vital.score.good .value, .vital.score.clean .value { color: var(--ok); }
+  .vital .footnote {
+    font-size: 11px; color: var(--ink-3); margin-top: 6px;
+    font-family: var(--font-mono);
+  }
+
+  /* ------------------------------------------------------------------ Section */
+  section { margin-top: 72px; scroll-margin-top: 70px; }
+  section.first { margin-top: 56px; }
+
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .section-head h2 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 32px;
+    letter-spacing: -0.015em;
+    margin: 0;
+    color: var(--ink);
+  }
+  .section-head h2 em { font-style: italic; color: var(--accent); }
+  .section-head .meta {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-3); text-transform: uppercase;
+    letter-spacing: 0.1em; white-space: nowrap;
+  }
+  .section-head .meta .count {
+    color: var(--ink); font-weight: 500;
+  }
+  .section-intro {
+    color: var(--ink-3); max-width: 680px;
+    margin: -8px 0 22px;
+    font-size: 14.5px; line-height: 1.6;
+  }
+  .section-intro em { font-style: italic; color: var(--ink-2); }
+
+  /* ------------------------------------------------------------------ Verdict cards */
+  .verdict-grid {
+    display: grid;
+    grid-template-columns: repeat({{ verdict_cards|length or 1 }}, 1fr);
+    gap: 14px;
+  }
+  @media (max-width: 880px) { .verdict-grid { grid-template-columns: 1fr; } }
+  .verdict-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--ink-3);
+    border-radius: var(--radius-lg);
+    padding: 22px 24px 24px;
+    box-shadow: var(--shadow-lg);
+    position: relative;
+    overflow: hidden;
+  }
+  .verdict-card.critical { border-top-color: var(--crit); }
+  .verdict-card.warning  { border-top-color: var(--warn); }
+  .verdict-card.info     { border-top-color: var(--accent); }
+  .verdict-card .tag {
+    font-family: var(--font-mono);
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+  .verdict-card.critical .tag { color: var(--crit); }
+  .verdict-card.warning  .tag { color: var(--warn); }
+  .verdict-card.info     .tag { color: var(--accent); }
+  .verdict-card .headline {
+    font-family: var(--font-display);
+    font-size: 22px; line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin: 8px 0 10px;
+    color: var(--ink);
+  }
+  .verdict-card .headline code {
+    font-family: var(--font-mono); font-size: 17px;
+    background: var(--accent-soft); padding: 1px 6px;
+    border-radius: var(--radius);
+    color: var(--accent-deep);
+  }
+  [data-theme="dark"] .verdict-card .headline code { color: var(--accent); }
+  .verdict-card .detail {
+    color: var(--ink-3);
+    font-size: 13.5px; line-height: 1.55;
+  }
+
+  /* ------------------------------------------------------------------ Action plan */
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  @media (max-width: 880px) { .actions { grid-template-columns: 1fr; } }
+  .action {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+  }
+  .action h3 {
+    margin: 0 0 4px;
+    font-family: var(--font-display);
+    font-weight: 400; font-style: italic;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .action.drop h3      { color: var(--crit); }
+  .action.review h3    { color: var(--warn); }
+  .action.transform h3 { color: var(--ok); }
+  .action .lede {
+    font-size: 12px; color: var(--ink-3);
+    margin-bottom: 14px; line-height: 1.5;
+  }
+  .action ul { list-style: none; padding: 0; margin: 0; }
+  .action li {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dotted var(--line);
+    font-size: 13px;
+  }
+  .action li:last-child { border-bottom: none; }
+  .action li .mark {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-4);
+    line-height: 1.5;
+  }
+  .action li .name {
+    font-family: var(--font-mono); font-size: 12.5px;
+    color: var(--ink); font-weight: 500;
+    word-break: break-all;
+  }
+  .action li .reason {
+    font-size: 11.5px; color: var(--ink-3);
+    line-height: 1.4; margin-top: 2px;
+  }
+  .action .empty {
+    font-size: 12px; color: var(--ink-4);
+    font-style: italic;
+    padding: 8px 0;
+  }
+  .action .count-badge {
+    float: right;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--ink-4);
+  }
+
+  /* ------------------------------------------------------------------ Findings */
+  .filter-bar {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 14px; align-items: center;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 100px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-2); cursor: pointer;
+    transition: all .15s ease;
+    user-select: none;
+  }
+  .chip:hover { border-color: var(--ink-3); color: var(--ink); }
+  .chip.active {
+    background: var(--ink); color: var(--surface);
+    border-color: var(--ink);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .chip.crit .dot { background: var(--crit); }
+  .chip.warn .dot { background: var(--warn); }
+  .chip.info .dot { background: var(--ink-3); }
+  .filter-bar input[type="search"] {
+    flex: 1; min-width: 200px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 6px 14px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--ink);
+    outline: none;
+    transition: border .15s ease;
+  }
+  .filter-bar input[type="search"]:focus { border-color: var(--accent); }
+  .filter-bar input[type="search"]::placeholder { color: var(--ink-4); }
+
+  .findings { display: flex; flex-direction: column; }
   .finding {
     display: grid;
-    grid-template-columns: 18px 100px 1fr auto;
+    grid-template-columns: 12px 96px 1fr auto;
     gap: 14px;
     align-items: baseline;
-    padding: 12px 16px;
-    background: white;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--line);
+    transition: background .15s ease;
   }
-  .finding.critical { border-left: 3px solid var(--crit); }
-  .finding.warning  { border-left: 3px solid var(--warn); }
-  .finding.info     { border-left: 3px solid var(--accent); }
+  .finding:hover { background: color-mix(in srgb, var(--card) 60%, transparent); }
+  .finding.hidden { display: none; }
   .finding .sev-dot {
     width: 8px; height: 8px; border-radius: 50%;
     display: inline-block; margin-top: 6px;
   }
   .finding.critical .sev-dot { background: var(--crit); }
   .finding.warning  .sev-dot { background: var(--warn); }
-  .finding.info     .sev-dot { background: var(--accent); }
+  .finding.info     .sev-dot { background: var(--ink-3); }
   .finding .category {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--ink-3); font-weight: 600;
+    font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); font-weight: 500;
   }
-  .finding .title { font-weight: 500; }
+  .finding .title {
+    font-weight: 500; color: var(--ink);
+    font-size: 14px;
+  }
   .finding .title code {
-    background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
-    font-size: 12px; color: var(--ink);
+    font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--surface-2); padding: 1px 6px;
+    border-radius: var(--radius);
+    color: var(--ink);
   }
   .finding .detail {
     color: var(--ink-3); font-size: 13px;
     grid-column: 3 / 5;
-    margin-top: 2px;
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .finding .why {
+    color: var(--ink-2); font-size: 12.5px;
+    grid-column: 3 / 5;
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+  .finding .why .label {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 9.5px;
+    color: var(--ink-4);
+    margin-right: 6px;
   }
   .finding .score {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11px; color: var(--ink-3);
+    font-family: var(--font-mono);
+    font-size: 11px; color: var(--ink-4);
+    font-variant-numeric: tabular-nums;
   }
 
-  .cols { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
-  @media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
-  .col-card {
-    background: white;
+  /* ------------------------------------------------------------------ Panels */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 18px 22px 8px;
+    box-shadow: var(--shadow);
+  }
+  .panel + .panel { margin-top: 14px; }
+  details.panel summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  details.panel summary::-webkit-details-marker { display: none; }
+  details.panel summary h3::after {
+    content: "⌄";
+    color: var(--ink-4);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    margin-left: 8px;
+  }
+  details.panel:not([open]) summary h3::after { content: "›"; }
+  .panel h3 {
+    font-family: var(--font-display);
+    margin: 0 0 4px;
+    font-size: 20px; font-weight: 400;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .panel .hint {
+    color: var(--ink-3); font-size: 12.5px;
+    margin-bottom: 12px;
+    line-height: 1.55;
+    max-width: 720px;
+  }
+  .panel .hint em { font-style: italic; color: var(--ink-2); }
+  .panel .hint code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--ink-2);
+  }
+
+  /* ------------------------------------------------------------------ Tables */
+  .table-scroll {
+    max-height: 460px;
+    overflow-y: auto;
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 18px 20px;
+    background: var(--surface);
+  }
+  .table-scroll table.data-table thead th {
+    position: sticky; top: 0;
+    background: var(--card);
+    z-index: 1;
+  }
+  .table-scroll table.data-table { margin: 0; }
+  .table-meta {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-3); margin: 6px 2px 0;
+    display: flex; justify-content: space-between;
+  }
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 4px 0 12px;
+  }
+  table.data-table thead th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--ink-3);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--ink);
+  }
+  table.data-table tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px dotted var(--line);
+  }
+  table.data-table tbody tr:last-child td { border-bottom: 1px solid var(--line); }
+  table.data-table tbody tr:hover { background: color-mix(in srgb, var(--accent-soft) 50%, transparent); }
+  table.data-table td.mono {
+    font-family: var(--font-mono); font-size: 12.5px;
+    color: var(--ink);
+  }
+  table.data-table td.num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    width: 76px;
+    color: var(--ink-2);
+  }
+  table.data-table td.note { color: var(--ink-3); font-size: 12px; }
+  table.data-table tr.leak td.note { color: var(--crit); font-weight: 500; }
+  table.data-table tr.leak td.mono::before {
+    content: "● "; color: var(--crit); font-size: 9px;
+  }
+  table.data-table tr.sev-critical td.note { color: var(--crit); }
+  table.data-table tr.sev-warning  td.note { color: var(--warn); }
+  table.data-table tr.sev-info     td.note { color: var(--ink-3); }
+  table.data-table tr.sev-critical td.mono::before {
+    content: "● "; color: var(--crit); font-size: 9px;
+  }
+  table.data-table tr.sev-warning  td.mono::before {
+    content: "● "; color: var(--warn); font-size: 9px;
+  }
+  table.data-table tr.picked td.num:first-child {
+    border-left: 2px solid var(--accent);
+    padding-left: 10px;
+  }
+
+  /* ------------------------------------------------------------------ Heatmap grid */
+  .heatmaps { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 1100px) { .heatmaps { grid-template-columns: 1fr; } }
+
+  /* ------------------------------------------------------------------ Column cards */
+  .col-toolbar {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    align-items: center; margin-bottom: 16px;
+  }
+  .col-toolbar .count-info {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-3);
+  }
+  .cols { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+  .col-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
     box-shadow: var(--shadow);
+    transition: border .15s ease;
+  }
+  .col-card.hidden { display: none; }
+  .col-card:hover { border-color: var(--line-2); }
+  .col-card.target {
+    border-left: 3px solid var(--accent);
+    background: linear-gradient(90deg, var(--accent-soft) 0%, var(--card) 12%);
+  }
+  .col-card.time {
+    border-left: 3px solid var(--ok);
   }
   .col-card header {
     display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
     margin-bottom: 6px;
   }
   .col-card h3 {
-    margin: 0; font-size: 14px; font-weight: 600;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    margin: 0; font-size: 13.5px; font-weight: 500;
+    font-family: var(--font-mono);
+    word-break: break-all;
+    color: var(--ink);
   }
+  .col-card .badges { display: flex; gap: 6px; flex-shrink: 0; }
   .col-card .type {
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 10px;
     color: var(--ink-3);
     text-transform: lowercase;
     background: var(--surface-2);
-    padding: 2px 8px; border-radius: 4px;
+    padding: 2px 8px; border-radius: 100px;
   }
+  .col-card .badge-target,
+  .col-card .badge-time {
+    font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 100px;
+  }
+  .col-card .badge-target { background: var(--accent-soft); color: var(--accent); }
+  .col-card .badge-time   { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
   .col-card .stats {
-    display: flex; flex-wrap: wrap; gap: 14px;
+    display: flex; flex-wrap: wrap;
+    gap: 4px 14px;
     font-size: 12px; color: var(--ink-3);
-    margin-bottom: 10px;
+    margin: 6px 0 10px;
+    font-family: var(--font-mono);
   }
   .col-card .stats b {
     color: var(--ink); font-variant-numeric: tabular-nums;
-    font-weight: 600; margin-right: 3px;
+    font-weight: 500; margin-right: 3px;
   }
   .col-card .stats .warn  b { color: var(--warn); }
   .col-card .stats .crit  b { color: var(--crit); }
-  .col-card .chart { margin: 0 -8px; }
+  .col-card .chart { margin: 0 -6px; }
 
-  .heatmaps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 1100px) { .heatmaps { grid-template-columns: 1fr; } }
-  .panel {
-    background: white;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 16px 20px 4px;
-    box-shadow: var(--shadow);
+  /* ------------------------------------------------------------------ Heatmap legend */
+  .heat-bar {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-left: 6px; vertical-align: middle;
   }
-  .panel h3 {
-    margin: 0 0 4px; font-size: 13px; font-weight: 600;
-    letter-spacing: -0.01em;
+  .heat-bar .swatch {
+    display: inline-block; width: 16px; height: 8px;
   }
-  .panel .hint { color: var(--ink-3); font-size: 12px; margin-bottom: 8px; }
 
-  table.target-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-    margin-top: 6px;
-  }
-  table.target-table thead th {
-    text-align: left;
-    font-weight: 600;
+  /* ------------------------------------------------------------------ Footer */
+  footer.report-footer {
+    margin-top: 96px;
+    padding-top: 24px;
+    border-top: 1px solid var(--ink);
     color: var(--ink-3);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--line);
-  }
-  table.target-table tbody td {
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--line);
-  }
-  table.target-table tbody tr:last-child td { border-bottom: 0; }
-  table.target-table td.mono {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;
+    line-height: 1.6;
+    display: flex; flex-wrap: wrap;
+    justify-content: space-between; gap: 12px;
   }
-  table.target-table td.num {
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    width: 70px;
-  }
-  table.target-table td.note { color: var(--ink-3); font-size: 12px; }
-  table.target-table tr.leak td.note { color: var(--crit); font-weight: 500; }
-  table.target-table tr.leak td.mono::before {
-    content: "● "; color: var(--crit); font-size: 9px;
-  }
-  table.target-table tr.sev-critical td.note { color: var(--crit); }
-  table.target-table tr.sev-warning  td.note { color: var(--warn); }
-  table.target-table tr.sev-info     td.note { color: var(--accent); }
-  table.target-table tr.sev-critical td.mono::before {
-    content: "● "; color: var(--crit); font-size: 9px;
-  }
-  table.target-table tr.sev-warning td.mono::before {
-    content: "● "; color: var(--warn); font-size: 9px;
-  }
-
-  table.cluster-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-    margin-top: 6px;
-  }
-  table.cluster-table thead th {
-    text-align: left;
-    font-weight: 600;
-    color: var(--ink-3);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--line);
-  }
-  table.cluster-table tbody td {
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: top;
-  }
-  table.cluster-table tbody tr:last-child td { border-bottom: 0; }
-  table.cluster-table td.num {
-    font-variant-numeric: tabular-nums;
-    width: 70px;
-    color: var(--ink-3);
-  }
-  table.cluster-table td.mono {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 12px;
+  footer.report-footer code {
+    font-family: var(--font-mono); font-size: 11.5px;
     color: var(--ink-2);
-    line-height: 1.7;
   }
-  table.cluster-table td.mono b { color: var(--ink); font-weight: 600; }
-  table.cluster-table tr.picked td.num:first-child {
-    border-left: 2px solid var(--accent);
-    padding-left: 8px;
+  footer.report-footer .colophon em {
+    font-family: var(--font-display); font-style: italic;
+    font-size: 14px; color: var(--accent);
   }
 
-  footer {
-    margin-top: 64px;
-    color: var(--ink-3); font-size: 12px;
-    border-top: 1px solid var(--line);
-    padding-top: 20px;
+  /* ------------------------------------------------------------------ Plotly polish */
+  .js-plotly-plot, .plot-container { background: transparent !important; }
+  .plotly .modebar { display: none !important; }
+
+  /* ------------------------------------------------------------------ Print */
+  @media print {
+    body { background: white; }
+    .topbar, nav.side { display: none; }
+    .layout { grid-template-columns: 1fr; }
+    main { padding: 24px; max-width: none; }
+    .verdict-card, .col-card, .panel, .action {
+      box-shadow: none;
+      page-break-inside: avoid;
+    }
   }
-  footer code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ------------------------------------------------------------------ Reveal animation */
+  .reveal { opacity: 0; transform: translateY(6px); animation: rise .6s ease forwards; }
+  .reveal:nth-child(1) { animation-delay: .05s; }
+  .reveal:nth-child(2) { animation-delay: .12s; }
+  .reveal:nth-child(3) { animation-delay: .19s; }
+  .reveal:nth-child(4) { animation-delay: .26s; }
+  .reveal:nth-child(5) { animation-delay: .33s; }
 </style>
 </head>
 <body>
+
+{# ============================================================ Top bar #}
+<header class="topbar">
+  <span class="mark">⁂</span>
+  <span class="file" title="{{ prof.source_name }}">{{ prof.source_name }}</span>
+  <div class="tally">
+    {% if sev_counts.critical %}
+    <span class="pill crit" data-jump="findings" title="Critical findings">
+      <span class="dot"></span>{{ sev_counts.critical }} critical
+    </span>{% endif %}
+    {% if sev_counts.warning %}
+    <span class="pill warn" data-jump="findings" title="Warnings">
+      <span class="dot"></span>{{ sev_counts.warning }} warning
+    </span>{% endif %}
+    {% if sev_counts.info %}
+    <span class="pill info" data-jump="findings" title="Informational">
+      <span class="dot"></span>{{ sev_counts.info }} info
+    </span>{% endif %}
+  </div>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle theme (t)" aria-label="Toggle theme">
+    <span data-theme-label="light">paper</span>
+    <span data-theme-label="dark" style="display:none">night</span>
+  </button>
+</header>
+
 <div class="layout">
+
+  {# ============================================================ Sidebar #}
   <nav class="side">
-    <div class="brand"><span class="dot">●</span> biopsy</div>
-    <div class="file">{{ prof.source_name }}</div>
-
+    <div class="group">Report</div>
+    <a href="#verdict">The verdict</a>
+    <a href="#action">Action plan</a>
     <a href="#findings">Findings <span class="count">{{ prof.findings|length }}</span></a>
-    {% if target_chart %}<a href="#target">Target signal</a>{% endif %}
-    {% if shortlist_chart %}<a href="#shortlist">Shortlist <span class="count">{{ shortlist|length }}</span></a>{% endif %}
-    {% if temporal_chart %}<a href="#temporal">Temporal</a>{% endif %}
-    <a href="#columns">Columns <span class="count">{{ prof.n_cols }}</span></a>
-    <a href="#correlations">Correlations</a>
 
-    {% if prof.findings %}
-    <div class="group-label">By severity</div>
-    {% set crit = prof.findings|selectattr("severity","equalto","critical")|list %}
-    {% set warn = prof.findings|selectattr("severity","equalto","warning")|list %}
-    {% set info = prof.findings|selectattr("severity","equalto","info")|list %}
-    {% if crit %}<a href="#findings"><span style="color:var(--crit)">●</span> Critical <span class="count">{{ crit|length }}</span></a>{% endif %}
-    {% if warn %}<a href="#findings"><span style="color:var(--warn)">●</span> Warning <span class="count">{{ warn|length }}</span></a>{% endif %}
-    {% if info %}<a href="#findings"><span style="color:var(--accent)">●</span> Info <span class="count">{{ info|length }}</span></a>{% endif %}
-    {% endif %}
+    <div class="group">Deep dive</div>
+    {% if target_chart or target_prevalence_chart %}<a href="#target">Target signal</a>{% endif %}
+    {% if shortlist_chart %}<a href="#shortlist">Shortlist <span class="count">{{ shortlist|length }}</span></a>{% endif %}
+    {% if temporal_chart or temporal_buckets %}<a href="#temporal">Temporal</a>{% endif %}
+    <a href="#columns">Columns <span class="count">{{ prof.n_cols }}</span></a>
+    {% if pearson_heatmap or mi_heatmap %}<a href="#correlations">Correlations</a>{% endif %}
+
+    <div class="legend">
+      <div class="row"><span class="dot" style="background:var(--crit)"></span> critical · drop or fix</div>
+      <div class="row"><span class="dot" style="background:var(--warn)"></span> warning · review carefully</div>
+      <div class="row"><span class="dot" style="background:var(--ink-3)"></span> info · note for context</div>
+    </div>
   </nav>
 
+  {# ============================================================ Main #}
   <main>
-    <h1>{{ prof.source_name }}</h1>
-    <div class="hero-meta">
-      <div><b>{{ prof.n_rows|commafy }}</b> rows</div>
-      <div><b>{{ prof.n_cols }}</b> columns</div>
-      <div><b>{{ "%.2f"|format(prof.elapsed_seconds) }}s</b> to profile</div>
-      {% if prof.target %}<div class="target"><b>{{ prof.target }}</b> target</div>{% endif %}
-    </div>
 
-    {% if prof.findings %}
-    <h2 id="findings">Findings <span class="count">{{ prof.findings|length }}</span></h2>
-    <div class="findings">
-      {% for f in prof.findings %}
-      <div class="finding {{ f.severity }}">
-        <span class="sev-dot"></span>
-        <span class="category">{{ f.category }}</span>
-        <span class="title">{{ f.title|replace('`', '')|e }}</span>
-        <span class="score">{{ "%.2f"|format(f.score) }}</span>
-        {% if f.detail %}<div class="detail">{{ f.detail|e }}</div>{% endif %}
+    {# ----- Hero ------------------------------------------------------- #}
+    <div class="hero">
+      <div class="eyebrow">
+        Forensic data profile
+        <span class="sep">·</span>
+        biopsy · v0.1
       </div>
-      {% endfor %}
-    </div>
-    {% endif %}
+      <h1>A <em>biopsy</em> of <br/>{{ prof.source_name }}</h1>
+      <p class="subtitle">
+        {% if prof.target %}
+          Probing <em>{{ prof.n_cols }}</em> columns and <em>{{ prof.n_rows|commafy }}</em> rows
+          against <code style="font-family:var(--font-mono);color:var(--accent)">{{ prof.target }}</code>{% if prof.time_column %}, along the axis of <em>{{ prof.time_column }}</em>{% endif %}.
+          Surfaced below — leakage, drift, redundancy, and what to keep.
+        {% else %}
+          A first-pass examination of <em>{{ prof.n_cols }}</em> columns across
+          <em>{{ prof.n_rows|commafy }}</em> rows. Below: shape, quality,
+          redundancy{% if prof.time_column %}, and temporal stability{% endif %}.
+        {% endif %}
+      </p>
 
-    {% if target_chart %}
-    <h2 id="target">Target signal · {{ prof.target }}</h2>
-    <div class="panel">
-      <h3>Predictive power score per feature</h3>
-      <div class="hint">PPS = depth-capped tree, cross-validated, normalized vs. naive baseline. Red bars are leakage suspects.</div>
-      {{ target_chart|safe }}
-    </div>
-    <div class="panel" style="margin-top: 14px;">
-      <h3>Per-feature metrics</h3>
-      <div class="hint">PPS catches non-linear; MI any shape; Spearman monotone; AUC binary classifier signal; Perm = multivariate permutation importance.</div>
-      <table class="target-table">
-        <thead>
-          <tr><th>feature</th><th>pps</th><th>mi</th><th>ρ</th><th>auc</th><th>perm</th><th>note</th></tr>
-        </thead>
-        <tbody>
-          {% for s in target_signals[:25] %}
-          <tr {% if s.is_leak_suspect %}class="leak"{% endif %}>
-            <td class="mono">{{ s.feature }}</td>
-            <td class="num">{{ "%.2f"|format(s.score) }}</td>
-            <td class="num">{{ "%.2f"|format(s.mutual_info) }}</td>
-            <td class="num">{% if s.spearman is none %}—{% else %}{{ "%+.2f"|format(s.spearman) }}{% endif %}</td>
-            <td class="num">{% if s.auc is none %}—{% else %}{{ "%.2f"|format(s.auc) }}{% endif %}</td>
-            <td class="num">{% if s.perm_importance is none %}—{% else %}{{ "%.2f"|format(s.perm_importance) }}{% endif %}</td>
-            <td class="note">{% if s.is_leak_suspect %}leakage suspect{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-
-    {% if shortlist_chart %}
-    <h2 id="shortlist">Shortlist <span class="count">{{ shortlist|length }} of {{ clusters|length }} clusters · |ρ| ≥ {{ "%.2f"|format(1 - cluster_cutoff) }}</span></h2>
-    <div class="panel">
-      <h3>Cluster representatives, ranked</h3>
-      <div class="hint">
-        Features are grouped by rank-correlation (Spearman); one representative
-        per cluster by best target-aware score. Purple bars are multi-member
-        clusters (redundancy reduced); indigo are singletons.
+      <div class="vitals">
+        <div class="vital">
+          <div class="label">Rows</div>
+          <div class="value">{{ prof.n_rows|commafy }}</div>
+        </div>
+        <div class="vital">
+          <div class="label">Columns</div>
+          <div class="value">{{ prof.n_cols }}</div>
+          <div class="footnote">
+            {%- for kind, n in kind_counts.items() -%}
+              {{ n }} {{ kind }}{% if not loop.last %} · {% endif %}
+            {%- endfor -%}
+          </div>
+        </div>
+        <div class="vital">
+          <div class="label">Profile time</div>
+          <div class="value">{{ "%.2f"|format(prof.elapsed_seconds) }}<span class="unit">s</span></div>
+        </div>
+        <div class="vital">
+          <div class="label">Missing cells</div>
+          <div class="value">{{ (null_share * 100)|round(1) }}<span class="unit">%</span></div>
+        </div>
+        <div class="vital score {{ verdict }}">
+          <div class="label">Health score</div>
+          <div class="value">{{ quality_score }}<span class="unit">/100</span></div>
+          <div class="footnote">{{ verdict }}</div>
+        </div>
       </div>
-      {{ shortlist_chart|safe }}
     </div>
-    <div class="panel" style="margin-top: 14px;">
-      <h3>Cluster map</h3>
-      <div class="hint">Cluster representatives are <b>bolded</b>; other members are correlated alternatives.</div>
-      <table class="cluster-table">
-        <thead>
-          <tr><th>cluster</th><th>size</th><th>mean |ρ|</th><th>members</th></tr>
-        </thead>
-        <tbody>
-          {% for c in clusters %}
-          <tr {% if c.in_shortlist %}class="picked"{% endif %}>
-            <td class="num">c{{ c.cluster_id }}</td>
-            <td class="num">{{ c.size }}</td>
-            <td class="num">{{ "%.2f"|format(c.mean_abs_correlation) }}</td>
-            <td class="mono">
-              {%- for m in c.members -%}
-                {% if m == c.representative %}<b>{{ m }}</b>{% else %}{{ m }}{% endif %}{% if not loop.last %} · {% endif %}
-              {%- endfor -%}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
 
-    {% if temporal_chart %}
-    <h2 id="temporal">Temporal · {{ prof.temporal.time_column }}</h2>
-    <div class="panel">
-      <h3>Random CV vs. time-ordered split</h3>
-      <div class="hint">
-        Features whose predictive power collapses on a time-ordered split likely encode
-        future information. Bigger gap = stronger leak signal.
+    {# ----- The Verdict ------------------------------------------------- #}
+    {% if verdict_cards %}
+    <section id="verdict" class="first">
+      <div class="section-head">
+        <h2>The <em>verdict</em></h2>
+        <div class="meta">top <span class="count">{{ verdict_cards|length }}</span> {{ "call" if verdict_cards|length == 1 else "calls" }}</div>
       </div>
-      {{ temporal_chart|safe }}
-    </div>
-    {% if temporal_signals %}
-    <div class="panel" style="margin-top: 14px;">
-      <h3>Temporal anomalies</h3>
-      <table class="target-table">
-        <thead>
-          <tr><th>feature</th><th>random→time</th><th>drift</th><th>monotonicity</th><th>finding</th></tr>
-        </thead>
-        <tbody>
-          {% for s in temporal_signals %}
-          <tr class="sev-{{ s.severity }}">
-            <td class="mono">{{ s.feature }}</td>
-            <td class="num">
-              {% if s.random_pps is none or s.time_pps is none %}—
-              {% else %}{{ "%.2f"|format(s.random_pps) }} → {{ "%.2f"|format(s.time_pps) }}{% endif %}
-            </td>
-            <td class="num">{% if s.drift_ks is none %}—{% else %}{{ "%.2f"|format(s.drift_ks) }}{% endif %}</td>
-            <td class="num">{% if s.time_monotonicity is none %}—{% else %}{{ "%.2f"|format(s.time_monotonicity) }}{% endif %}</td>
-            <td class="note">{{ s.reason }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
+      <p class="section-intro">
+        Three things to look at first — the most consequential finding at each
+        severity tier. Everything else is below.
+      </p>
+      <div class="verdict-grid">
+        {% for f in verdict_cards %}
+        <article class="verdict-card {{ f.severity }} reveal">
+          <div class="tag">
+            {%- if f.severity == "critical" -%}● critical · {{ f.category }}
+            {%- elif f.severity == "warning" -%}● warning · {{ f.category }}
+            {%- else -%}● info · {{ f.category }}
+            {%- endif -%}
+          </div>
+          <div class="headline">{{ f.title|ticks }}</div>
+          {% if f.detail %}<div class="detail">{{ f.detail }}</div>{% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
     {% endif %}
 
-    <h2 id="columns">Columns <span class="count">{{ prof.n_cols }}</span></h2>
-    <div class="cols">
-      {% for item in columns %}
-      {% set s = item.stats %}
-      <div class="col-card">
-        <header>
-          <h3>{{ s.name }}</h3>
-          <span class="type">{{ s.dtype|lower }}</span>
-        </header>
-        <div class="stats">
-          <div><b>{{ s.n_unique|commafy }}</b> unique</div>
-          {% if s.null_rate > 0.5 %}
-            <div class="crit"><b>{{ s.null_rate|pct }}</b> null</div>
-          {% elif s.null_rate > 0.1 %}
-            <div class="warn"><b>{{ s.null_rate|pct }}</b> null</div>
-          {% else %}
-            <div><b>{{ s.null_rate|pct }}</b> null</div>
-          {% endif %}
-          {% if s.kind == "numeric" and s.mean is not none %}
-            <div>μ <b>{{ s.mean|num }}</b></div>
-            <div>σ <b>{{ s.std|num }}</b></div>
-            <div>[{{ s.min|num }} … {{ s.max|num }}]</div>
-            {% if s.skew is not none and s.skew|abs > 1 %}
-              <div class="{% if s.skew|abs > 3 %}crit{% else %}warn{% endif %}">skew <b>{{ "%+.2f"|format(s.skew) }}</b></div>
+    {# ----- Action plan ------------------------------------------------- #}
+    {% if action_plan.drop or action_plan.review or action_plan.transform %}
+    <section id="action">
+      <div class="section-head">
+        <h2>Action <em>plan</em></h2>
+        <div class="meta">synthesized from findings</div>
+      </div>
+      <p class="section-intro">
+        Three buckets — what to <em>drop before modeling</em>, what to
+        <em>review</em> with a human, and what to <em>transform</em>.
+        Derived from the ranked findings; not a substitute for judgement.
+      </p>
+      <div class="actions">
+
+        <div class="action drop reveal">
+          <h3>Drop <span class="count-badge">{{ action_plan.drop|length }}</span></h3>
+          <div class="lede">Empty, constant, identifier, or 100%-null columns. Safe candidates to exclude.</div>
+          {% if action_plan.drop %}
+          <ul>
+            {% for a in action_plan.drop[:12] %}
+            <li>
+              <span class="mark">×</span>
+              <div>
+                <span class="name">{{ a.name }}</span>
+                <div class="reason">{{ a.reason }}</div>
+              </div>
+            </li>
+            {% endfor %}
+            {% if action_plan.drop|length > 12 %}
+            <li><span class="mark">…</span><span class="reason">+{{ action_plan.drop|length - 12 }} more</span></li>
             {% endif %}
-            {% if s.n_outliers_iqr %}
-              <div class="warn"><b>{{ s.n_outliers_iqr|commafy }}</b> outliers</div>
+          </ul>
+          {% else %}
+          <div class="empty">— nothing obvious to drop.</div>
+          {% endif %}
+        </div>
+
+        <div class="action review reveal">
+          <h3>Review <span class="count-badge">{{ action_plan.review|length }}</span></h3>
+          <div class="lede">Possible leakage, temporal instability, encoded nulls, or target-class issues. Eyes on these.</div>
+          {% if action_plan.review %}
+          <ul>
+            {% for a in action_plan.review[:12] %}
+            <li>
+              <span class="mark">?</span>
+              <div>
+                <span class="name">{{ a.name }}</span>
+                <div class="reason">{{ a.reason }}</div>
+              </div>
+            </li>
+            {% endfor %}
+            {% if action_plan.review|length > 12 %}
+            <li><span class="mark">…</span><span class="reason">+{{ action_plan.review|length - 12 }} more</span></li>
+            {% endif %}
+          </ul>
+          {% else %}
+          <div class="empty">— no leakage suspects flagged.</div>
+          {% endif %}
+        </div>
+
+        <div class="action transform reveal">
+          <h3>Transform <span class="count-badge">{{ action_plan.transform|length }}</span></h3>
+          <div class="lede">Heavy skew or material outlier counts. Consider log, Box–Cox, or winsorizing before fitting.</div>
+          {% if action_plan.transform %}
+          <ul>
+            {% for a in action_plan.transform[:12] %}
+            <li>
+              <span class="mark">~</span>
+              <div>
+                <span class="name">{{ a.name }}</span>
+                <div class="reason">{{ a.reason }}</div>
+              </div>
+            </li>
+            {% endfor %}
+            {% if action_plan.transform|length > 12 %}
+            <li><span class="mark">…</span><span class="reason">+{{ action_plan.transform|length - 12 }} more</span></li>
+            {% endif %}
+          </ul>
+          {% else %}
+          <div class="empty">— numerics look well-behaved.</div>
+          {% endif %}
+        </div>
+
+      </div>
+    </section>
+    {% endif %}
+
+    {# ----- Findings (filterable) ------------------------------------- #}
+    {% if prof.findings %}
+    <section id="findings">
+      <div class="section-head">
+        <h2>All <em>findings</em></h2>
+        <div class="meta"><span class="count">{{ prof.findings|length }}</span> total</div>
+      </div>
+      <div class="filter-bar" id="findings-filter">
+        <span class="chip active" data-sev="all">all <span class="count" style="color:var(--ink-4)">{{ prof.findings|length }}</span></span>
+        {% if sev_counts.critical %}<span class="chip crit" data-sev="critical"><span class="dot"></span>critical <span class="count" style="color:var(--ink-4)">{{ sev_counts.critical }}</span></span>{% endif %}
+        {% if sev_counts.warning  %}<span class="chip warn" data-sev="warning"><span class="dot"></span>warning <span class="count" style="color:var(--ink-4)">{{ sev_counts.warning }}</span></span>{% endif %}
+        {% if sev_counts.info     %}<span class="chip info" data-sev="info"><span class="dot"></span>info <span class="count" style="color:var(--ink-4)">{{ sev_counts.info }}</span></span>{% endif %}
+        <input type="search" id="findings-search" placeholder="Filter findings · type / to focus" />
+      </div>
+      <div class="findings">
+        {% for f in prof.findings %}
+        <div class="finding {{ f.severity }}"
+             data-sev="{{ f.severity }}"
+             data-cat="{{ f.category }}"
+             data-text="{{ (f.title ~ ' ' ~ f.detail)|lower|e }}">
+          <span class="sev-dot"></span>
+          <span class="category">{{ f.category }}</span>
+          <span class="title">{{ f.title|ticks }}</span>
+          <span class="score">{{ "%.2f"|format(f.score) }}</span>
+          {% if f.detail %}<div class="detail">{{ f.detail|e }}</div>{% endif %}
+          <div class="why"><span class="label">why</span>{{ f.why|ticks }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {# ----- Target signal ---------------------------------------------- #}
+    {% if target_chart or target_prevalence_chart %}
+    <section id="target">
+      <div class="section-head">
+        <h2>Target <em>signal</em></h2>
+        <div class="meta">{{ prof.target }} · {{ prof.target_summary.kind if prof.target_summary else "" }}</div>
+      </div>
+
+      {% if target_prevalence_chart %}
+      <div class="panel">
+        <h3>Class distribution</h3>
+        <div class="hint">
+          {% if prof.target_summary and prof.target_summary.kind == "classification" %}
+            {{ prof.target_summary.n_unique }} class{% if prof.target_summary.n_unique != 1 %}es{% endif %}
+            across {{ (prof.target_summary.n - prof.target_summary.n_null)|commafy }} labeled rows.
+            {% if prof.target_summary.positive_rate is not none %}
+              Positive class <code>{{ prof.target_summary.positive_value }}</code> at <em>{{ "%.2f%%"|format(100 * prof.target_summary.positive_rate) }}</em>.
             {% endif %}
           {% endif %}
         </div>
-        {% if item.chart %}<div class="chart">{{ item.chart|safe }}</div>{% endif %}
+        {{ target_prevalence_chart|safe }}
       </div>
-      {% endfor %}
-    </div>
+      {% endif %}
 
-    {% if pearson_heatmap or mi_heatmap %}
-    <h2 id="correlations">Correlations</h2>
-    <div class="heatmaps">
-      {% if pearson_heatmap %}
+      {% if target_chart %}
       <div class="panel">
-        <h3>Pearson — linear</h3>
-        <div class="hint">−1 to +1. Blue = negative, red = positive.</div>
-        {{ pearson_heatmap|safe }}
+        <h3>Predictive power per feature</h3>
+        <div class="hint">
+          PPS — depth-capped tree, cross-validated, normalized vs. a naive baseline.
+          <em>Red bars are leakage suspects</em>. Higher is more predictive, but for a feature alone.
+        </div>
+        {{ target_chart|safe }}
+      </div>
+
+      <div class="panel">
+        <h3>Per-feature metrics</h3>
+        <div class="hint">
+          <em>PPS</em> catches non-linear · <em>MI</em> any shape · <em>ρ</em> monotone
+          · <em>AUC</em> binary classifier signal · <em>rel perm</em> multivariate permutation importance.
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr><th>feature</th><th>pps</th><th>mi</th><th>ρ</th><th>auc</th><th>auc lift</th><th>rel perm</th><th>note</th></tr>
+          </thead>
+          <tbody>
+            {% for s in target_signals[:25] %}
+            <tr {% if s.is_leak_suspect %}class="leak"{% endif %}>
+              <td class="mono">{{ s.feature }}</td>
+              <td class="num">{{ "%.2f"|format(s.score) }}</td>
+              <td class="num">{{ "%.2f"|format(s.mutual_info) }}</td>
+              <td class="num">{% if s.spearman is none %}—{% else %}{{ "%+.2f"|format(s.spearman) }}{% endif %}</td>
+              <td class="num">{% if s.raw_auc is none %}—{% else %}{{ "%.3f"|format(s.raw_auc) }}{% endif %}</td>
+              <td class="num">{% if s.auc is none %}—{% else %}{{ "%.2f"|format(s.auc) }}{% endif %}</td>
+              <td class="num">{% if s.perm_importance is none %}—{% else %}{{ "%.2f"|format(s.perm_importance) }}{% endif %}</td>
+              <td class="note">{% if s.is_leak_suspect %}leakage suspect{% else %}n={{ s.support|commafy }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
       {% endif %}
-      {% if mi_heatmap %}
-      <div class="panel">
-        <h3>Mutual information — any shape</h3>
-        <div class="hint">0 to 1. Catches non-linear relationships missed by Pearson.</div>
-        {{ mi_heatmap|safe }}
-      </div>
-      {% endif %}
-    </div>
+    </section>
     {% endif %}
 
-    <footer>
-      Generated by <code>biopsy profile</code> · {{ prof.source_name }}
+    {# ----- Shortlist --------------------------------------------------- #}
+    {% if shortlist_chart %}
+    <section id="shortlist">
+      <div class="section-head">
+        <h2>Feature <em>shortlist</em></h2>
+        <div class="meta">
+          <span class="count">{{ shortlist|length }}</span> of {{ clusters|length }} clusters · |ρ| ≥ {{ "%.2f"|format(1 - cluster_cutoff) }}
+        </div>
+      </div>
+      <p class="section-intro">
+        Features grouped by rank-correlation (Spearman); one representative per cluster, chosen by
+        target-aware score. <em>Indigo</em> are multi-member clusters (redundancy reduced),
+        <em>oxblood</em> are singletons, <em>ochre</em> are weak — kept only to fill the shortlist.
+      </p>
+      <div class="panel">
+        <h3>Cluster representatives, ranked</h3>
+        <div class="hint">
+          Rationale favors features that carry target signal while collapsing correlated alternatives.
+          Weak entries are marked so you can keep coverage without pretending every representative is strong.
+        </div>
+        {{ shortlist_chart|safe }}
+      </div>
+      <details class="panel" open>
+        <summary><h3>Cluster map</h3></summary>
+        <div class="hint">
+          Cluster representatives are <em>bold</em>; other members are correlated alternatives you could swap in.
+          {% if clusters|length > 16 %}<em>Table is scrollable.</em>{% endif %}
+        </div>
+        <div class="{% if clusters|length > 16 %}table-scroll{% endif %}">
+          <table class="data-table">
+            <thead>
+              <tr><th>cluster</th><th>size</th><th>mean |ρ|</th><th>members</th></tr>
+            </thead>
+            <tbody>
+              {% for c in clusters %}
+              <tr {% if c.in_shortlist %}class="picked"{% endif %}>
+                <td class="num">c{{ c.cluster_id }}</td>
+                <td class="num">{{ c.size }}</td>
+                <td class="num">{{ "%.2f"|format(c.mean_abs_correlation) }}</td>
+                <td class="mono">
+                  {%- for m in c.members -%}
+                    {% if m == c.representative %}<b style="color:var(--ink);font-weight:600">{{ m }}</b>{% else %}<span style="color:var(--ink-3)">{{ m }}</span>{% endif %}{% if not loop.last %} · {% endif %}
+                  {%- endfor -%}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+    {% endif %}
+
+    {# ----- Temporal --------------------------------------------------- #}
+    {% if temporal_chart or temporal_buckets %}
+    <section id="temporal">
+      <div class="section-head">
+        <h2>Temporal <em>profile</em></h2>
+        <div class="meta">axis · {{ prof.temporal.time_column }}</div>
+      </div>
+      {% if temporal_buckets %}
+      <div class="panel">
+        <h3>Time buckets <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-3);font-weight:400;margin-left:8px">{{ temporal_buckets|length }} periods</span></h3>
+        <div class="hint">
+          Low-cardinality date columns still get target-by-period drift even when
+          leakage-style time splits are skipped.
+          {% if temporal_buckets|length > 14 %}<em>Table is scrollable.</em>{% endif %}
+        </div>
+        <div class="{% if temporal_buckets|length > 14 %}table-scroll{% endif %}">
+          <table class="data-table">
+            <thead>
+              <tr><th>time</th><th>rows</th><th>target n</th><th>target rate / mean</th></tr>
+            </thead>
+            <tbody>
+              {% for b in temporal_buckets %}
+              <tr>
+                <td class="mono">{{ b.label }}</td>
+                <td class="num">{{ b.n_rows|commafy }}</td>
+                <td class="num">{% if b.n_target is none %}—{% else %}{{ b.n_target|commafy }}{% endif %}</td>
+                <td class="num">
+                  {% if b.target_rate is not none %}{{ "%.2f%%"|format(100 * b.target_rate) }}
+                  {% elif b.target_mean is not none %}{{ b.target_mean|num }}
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+      {% if temporal_chart %}
+      <div class="panel">
+        <h3>Random CV vs. time-ordered split</h3>
+        <div class="hint">
+          Features whose predictive power collapses on a time-ordered split likely
+          encode future information. <em>Wider the gap, stronger the leak signal.</em>
+        </div>
+        {{ temporal_chart|safe }}
+      </div>
+      {% endif %}
+      {% if temporal_signals %}
+      <div class="panel">
+        <h3>Temporal anomalies</h3>
+        <table class="data-table">
+          <thead>
+            <tr><th>feature</th><th>random→time</th><th>drift</th><th>monotonicity</th><th>finding</th></tr>
+          </thead>
+          <tbody>
+            {% for s in temporal_signals %}
+            <tr class="sev-{{ s.severity }}">
+              <td class="mono">{{ s.feature }}</td>
+              <td class="num">
+                {% if s.random_pps is none or s.time_pps is none %}—
+                {% else %}{{ "%.2f"|format(s.random_pps) }} → {{ "%.2f"|format(s.time_pps) }}{% endif %}
+              </td>
+              <td class="num">{% if s.drift_ks is none %}—{% else %}{{ "%.2f"|format(s.drift_ks) }}{% endif %}</td>
+              <td class="num">{% if s.time_monotonicity is none %}—{% else %}{{ "%.2f"|format(s.time_monotonicity) }}{% endif %}</td>
+              <td class="note">{{ s.reason }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {# ----- Columns ---------------------------------------------------- #}
+    <section id="columns">
+      <div class="section-head">
+        <h2>Per-column <em>portraits</em></h2>
+        <div class="meta"><span class="count">{{ prof.n_cols }}</span> columns</div>
+      </div>
+      <div class="col-toolbar">
+        <input type="search" id="col-search" placeholder="Search columns by name · type / to focus" />
+        <span class="chip active" data-kind="all" data-target="col">all</span>
+        {% if kind_counts.get('numeric') %}<span class="chip" data-kind="numeric" data-target="col">numeric <span class="count">{{ kind_counts['numeric'] }}</span></span>{% endif %}
+        {% if kind_counts.get('text')    %}<span class="chip" data-kind="text"    data-target="col">text <span class="count">{{ kind_counts['text'] }}</span></span>{% endif %}
+        {% if kind_counts.get('bool')    %}<span class="chip" data-kind="bool"    data-target="col">bool <span class="count">{{ kind_counts['bool'] }}</span></span>{% endif %}
+        {% if kind_counts.get('temporal')%}<span class="chip" data-kind="temporal" data-target="col">temporal <span class="count">{{ kind_counts['temporal'] }}</span></span>{% endif %}
+        <span class="count-info" id="col-count">{{ prof.n_cols }} showing</span>
+      </div>
+      <div class="cols" id="cols-grid">
+        {% for item in columns %}
+        {% set s = item.stats %}
+        <div class="col-card {% if item.is_target %}target{% endif %} {% if item.is_time %}time{% endif %}"
+             data-kind="{{ s.kind }}"
+             data-name="{{ s.name|lower|e }}">
+          <header>
+            <h3>{{ s.name }}</h3>
+            <div class="badges">
+              {% if item.is_target %}<span class="badge-target">target</span>{% endif %}
+              {% if item.is_time %}<span class="badge-time">time</span>{% endif %}
+              <span class="type">{{ s.dtype|lower }}</span>
+            </div>
+          </header>
+          <div class="stats">
+            <div><b>{{ s.n_unique|commafy }}</b>unique</div>
+            {% if s.null_rate > 0.5 %}
+              <div class="crit"><b>{{ s.null_rate|pct }}</b>null</div>
+            {% elif s.null_rate > 0.1 %}
+              <div class="warn"><b>{{ s.null_rate|pct }}</b>null</div>
+            {% else %}
+              <div><b>{{ s.null_rate|pct }}</b>null</div>
+            {% endif %}
+            {% if s.kind == "numeric" and s.mean is not none %}
+              <div>μ<b>{{ s.mean|num }}</b></div>
+              <div>σ<b>{{ s.std|num }}</b></div>
+              <div>[{{ s.min|num }}…{{ s.max|num }}]</div>
+              {% if s.skew is not none and s.skew|abs > 1 %}
+                <div class="{% if s.skew|abs > 3 %}crit{% else %}warn{% endif %}">skew<b>{{ "%+.2f"|format(s.skew) }}</b></div>
+              {% endif %}
+              {% if s.n_outliers_iqr %}
+                <div class="warn"><b>{{ s.n_outliers_iqr|commafy }}</b>outliers</div>
+              {% endif %}
+            {% endif %}
+          </div>
+          {% if item.chart %}<div class="chart">{{ item.chart|safe }}</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    {# ----- Correlations ----------------------------------------------- #}
+    {% if pearson_heatmap or mi_heatmap %}
+    <section id="correlations">
+      <div class="section-head">
+        <h2>Correlation <em>matrices</em></h2>
+        <div class="meta">numeric features only</div>
+      </div>
+      <div class="heatmaps">
+        {% if pearson_heatmap %}
+        <div class="panel">
+          <h3>Pearson — linear</h3>
+          <div class="hint">
+            Values in [−1, +1].
+            <span class="heat-bar">
+              <span class="swatch" style="background:#1E3A8A"></span>
+              <span class="swatch" style="background:#93C5FD"></span>
+              <span class="swatch" style="background:var(--surface)"></span>
+              <span class="swatch" style="background:#E7B4A3"></span>
+              <span class="swatch" style="background:var(--accent-deep)"></span>
+            </span>
+            Blue = negative · Oxblood = positive.
+          </div>
+          {{ pearson_heatmap|safe }}
+        </div>
+        {% endif %}
+        {% if mi_heatmap %}
+        <div class="panel">
+          <h3>Mutual information — any shape</h3>
+          <div class="hint">Values in [0, 1]. Catches non-linear relationships missed by Pearson.</div>
+          {{ mi_heatmap|safe }}
+        </div>
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+
+    {# ----- Footer ----------------------------------------------------- #}
+    <footer class="report-footer">
+      <div>
+        <em class="colophon">Generated by <em>biopsy profile</em></em>
+        <br />
+        Source · <code>{{ prof.source_name }}</code>
+        {% if prof.target %} · Target · <code>{{ prof.target }}</code>{% endif %}
+        {% if prof.time_column %} · Time · <code>{{ prof.time_column }}</code>{% endif %}
+      </div>
+      <div>
+        Press <code>t</code> for theme · <code>/</code> to search.
+      </div>
     </footer>
+
   </main>
 </div>
+
+<script>
+  (function () {
+    // -- Theme toggle -------------------------------------------------
+    const root = document.documentElement;
+    const toggle = document.getElementById("theme-toggle");
+    const storeKey = "biopsy-theme";
+    const apply = (mode) => {
+      root.setAttribute("data-theme", mode);
+      document.querySelectorAll("[data-theme-label]").forEach(el => {
+        el.style.display = el.dataset.themeLabel === mode ? "" : "none";
+      });
+    };
+    // Honor stored preference; default to OS preference; fall back to light.
+    const stored = (() => { try { return localStorage.getItem(storeKey); } catch (e) { return null; } })();
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    apply(stored || (prefersDark ? "dark" : "light"));
+    toggle.addEventListener("click", () => {
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      apply(next);
+      try { localStorage.setItem(storeKey, next); } catch (e) {}
+    });
+
+    // -- Tally pills jump to findings --------------------------------
+    document.querySelectorAll(".topbar .pill[data-jump]").forEach(p => {
+      p.addEventListener("click", () => {
+        const sec = document.getElementById(p.dataset.jump);
+        if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+
+    // -- Findings filter ----------------------------------------------
+    const findingsFilter = document.getElementById("findings-filter");
+    const searchInput = document.getElementById("findings-search");
+    let currentSev = "all";
+    const applyFindingsFilter = () => {
+      const q = (searchInput?.value || "").toLowerCase().trim();
+      document.querySelectorAll(".findings .finding").forEach(el => {
+        const sevOk = currentSev === "all" || el.dataset.sev === currentSev;
+        const textOk = !q || el.dataset.text.includes(q);
+        el.classList.toggle("hidden", !(sevOk && textOk));
+      });
+    };
+    findingsFilter?.querySelectorAll(".chip[data-sev]").forEach(c => {
+      c.addEventListener("click", () => {
+        findingsFilter.querySelectorAll(".chip[data-sev]").forEach(x => x.classList.remove("active"));
+        c.classList.add("active");
+        currentSev = c.dataset.sev;
+        applyFindingsFilter();
+      });
+    });
+    searchInput?.addEventListener("input", applyFindingsFilter);
+
+    // -- Column filter & search --------------------------------------
+    const colSearch = document.getElementById("col-search");
+    const colChips = document.querySelectorAll(".chip[data-target='col']");
+    const colCount = document.getElementById("col-count");
+    let currentKind = "all";
+    const applyColFilter = () => {
+      const q = (colSearch?.value || "").toLowerCase().trim();
+      let visible = 0, total = 0;
+      document.querySelectorAll("#cols-grid .col-card").forEach(el => {
+        total++;
+        const kindOk = currentKind === "all" || el.dataset.kind === currentKind;
+        const nameOk = !q || el.dataset.name.includes(q);
+        const show = kindOk && nameOk;
+        el.classList.toggle("hidden", !show);
+        if (show) visible++;
+      });
+      if (colCount) colCount.textContent = visible === total ? (total + " showing") : (visible + " / " + total + " showing");
+    };
+    colChips.forEach(c => {
+      c.addEventListener("click", () => {
+        colChips.forEach(x => x.classList.remove("active"));
+        c.classList.add("active");
+        currentKind = c.dataset.kind;
+        applyColFilter();
+      });
+    });
+    colSearch?.addEventListener("input", applyColFilter);
+
+    // -- Active section highlighting in sidebar ----------------------
+    const navLinks = document.querySelectorAll("nav.side a[href^='#']");
+    const sections = Array.from(navLinks)
+      .map(a => document.getElementById(a.getAttribute("href").slice(1)))
+      .filter(Boolean);
+    const linkByHash = new Map(
+      Array.from(navLinks).map(a => [a.getAttribute("href").slice(1), a])
+    );
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          navLinks.forEach(a => a.classList.remove("active"));
+          const link = linkByHash.get(e.target.id);
+          link && link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-40% 0px -55% 0px" });
+    sections.forEach(s => io.observe(s));
+
+    // -- Keyboard shortcuts ------------------------------------------
+    document.addEventListener("keydown", (e) => {
+      const isTyping = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
+      if (e.key === "/" && !isTyping) {
+        e.preventDefault();
+        const visible = document.querySelector("#findings-search") || document.querySelector("#col-search");
+        visible?.focus();
+      } else if (e.key === "t" && !isTyping) {
+        toggle.click();
+      } else if (e.key === "Escape" && isTyping) {
+        document.activeElement.blur();
+      }
+    });
+  })();
+</script>
 </body>
 </html>

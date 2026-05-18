@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from biopsy.correlations import CorrelationPair, TargetSignal
 from biopsy.stats import ColumnStats
@@ -21,6 +22,45 @@ class Finding:
     @property
     def rank(self) -> int:
         return {"critical": 0, "warning": 1, "info": 2}[self.severity]
+
+    @property
+    def why(self) -> str:
+        if self.category == "leakage":
+            return (
+                "Leakage can make offline scores look excellent while production "
+                "performance collapses."
+            )
+        if self.category == "quality":
+            return (
+                "Data quality issues change what the model can learn and often need "
+                "a policy before training."
+            )
+        if self.category == "suspicious":
+            return (
+                "Suspicious columns are common sources of wasted features, accidental "
+                "identifiers, or brittle encodings."
+            )
+        if self.category == "distribution":
+            return (
+                "Distribution shape affects transforms, model choice, and how much "
+                "trust to put in summary statistics."
+            )
+        if self.category == "correlation":
+            return (
+                "Highly related features can duplicate signal, hide leakage, or make "
+                "feature importance harder to interpret."
+            )
+        if self.category == "target":
+            return (
+                "Target issues determine whether metrics are stable and whether the "
+                "problem framing is ready for modeling."
+            )
+        if self.category == "temporal":
+            return (
+                "Temporal effects reveal train/test mismatch and future-looking "
+                "features before they become expensive modeling bugs."
+            )
+        return "This changes how the dataset should be prepared or interpreted."
 
 
 _NULL_SENTINELS: frozenset[str] = frozenset({"?", "NA", "N/A", "n/a", "nan", "NaN"})
@@ -41,10 +81,15 @@ def _looks_like_id(name: str) -> bool:
     return "uuid" in n
 
 
-def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]:
+def column_findings(
+    stats: dict[str, ColumnStats],
+    n_rows: int,
+    target: str | None = None,
+) -> list[Finding]:
     out: list[Finding] = []
 
     for s in stats.values():
+        is_target = s.name == target
         # 100% null — check before constant, since an all-null column has
         # n_unique=0 and would otherwise be miscategorized as "constant".
         if s.null_rate >= 1.0:
@@ -57,7 +102,7 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             continue
 
         # constants (after the all-null check above)
-        if s.is_constant:
+        if s.is_constant and not is_target:
             out.append(Finding(
                 severity="warning", category="suspicious",
                 title=f"`{s.name}` is constant",
@@ -70,7 +115,7 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             continue
 
         # near-constant
-        if s.is_near_constant:
+        if s.is_near_constant and not is_target:
             top_val, top_count = s.top_values[0]
             pct = top_count / max(s.n - s.n_null, 1)
             out.append(Finding(
@@ -113,7 +158,7 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             ))
 
         # extreme skew
-        if s.skew is not None and abs(s.skew) > 3:
+        if s.skew is not None and abs(s.skew) > 3 and not is_target:
             out.append(Finding(
                 severity="info", category="distribution",
                 title=f"`{s.name}` is heavily skewed (skew={s.skew:.1f})",
@@ -122,7 +167,7 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
             ))
 
         # outliers
-        if s.n_outliers_iqr is not None and s.n_outliers_iqr > 0:
+        if s.n_outliers_iqr is not None and s.n_outliers_iqr > 0 and not is_target:
             rate = s.n_outliers_iqr / max(s.n - s.n_null, 1)
             if rate > 0.01:
                 out.append(Finding(
@@ -161,6 +206,48 @@ def column_findings(stats: dict[str, ColumnStats], n_rows: int) -> list[Finding]
                 columns=[s.name], score=0.7,
             ))
 
+    return out
+
+
+def target_summary_findings(summary: Any) -> list[Finding]:
+    out: list[Finding] = []
+    if summary.kind == "classification":
+        if summary.n_unique == 2 and summary.positive_count is not None:
+            rate = summary.positive_rate or 0.0
+            sev = "warning" if summary.positive_count < 100 or rate < 0.01 else "info"
+            out.append(Finding(
+                severity=sev,
+                category="target",
+                title=f"`{summary.name}` is an imbalanced binary target ({rate:.2%} positive)",
+                detail=(
+                    f"Positive class `{summary.positive_value}` appears "
+                    f"{summary.positive_count:,} times across "
+                    f"{summary.n - summary.n_null:,} labeled rows."
+                ),
+                columns=[summary.name],
+                score=min(1.0, 1.0 - rate),
+            ))
+        elif summary.min_class_count is not None and summary.min_class_count < 30:
+            out.append(Finding(
+                severity="warning",
+                category="target",
+                title=f"`{summary.name}` has classes with very low support",
+                detail=(
+                    f"Smallest class has {summary.min_class_count:,} rows. "
+                    "Target metrics may be unstable."
+                ),
+                columns=[summary.name],
+                score=0.8,
+            ))
+    if summary.n_null:
+        out.append(Finding(
+            severity="warning" if summary.n_null / max(summary.n, 1) > 0.1 else "info",
+            category="target",
+            title=f"`{summary.name}` has missing target labels",
+            detail=f"{summary.n_null:,} of {summary.n:,} rows have no target.",
+            columns=[summary.name],
+            score=summary.n_null / max(summary.n, 1),
+        ))
     return out
 
 
@@ -268,9 +355,12 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
                 "Models trained on one period may not generalize."
             )
         else:  # regression_diff (scale-dependent)
+            scale_note = ""
+            if report.target_drift_score is not None:
+                scale_note = f" ({report.target_drift_score:.1f}× target spread)"
             detail = (
                 f"Target mean range across deciles is {report.target_drift:.3g} "
-                f"(target spans negatives or zero). Models may not generalize."
+                f"{scale_note}. Models trained on one period may not generalize."
             )
         out.append(Finding(
             severity="info",
@@ -278,7 +368,7 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
             title=f"`{target}` distribution drifts over `{report.time_column}`",
             detail=detail,
             columns=[target, report.time_column],
-            score=min(report.target_drift or 0.0, 1.0),
+            score=min(report.target_drift_score or report.target_drift or 0.0, 1.0),
         ))
 
     return out

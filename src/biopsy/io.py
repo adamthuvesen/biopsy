@@ -45,6 +45,7 @@ def load(
     data: str | Path | Any,
     sample: int | None = None,
     exclude: list[str] | None = None,
+    ignore_missing_exclude: bool = False,
     where: list[str] | None = None,
     source_name: str | None = None,
 ) -> Source:
@@ -55,6 +56,7 @@ def load(
     data: path, pandas/polars/Arrow object, or DuckDB relation.
     sample: random reservoir sample size (deterministic seed=42).
     exclude: column names to drop from the view (e.g. known target proxies).
+    ignore_missing_exclude: silently skip excluded columns absent from this dataset.
     where: filter expressions, AND-ed together. See `parse_filter_expr`.
     source_name: display name for in-memory data. File paths ignore this.
     """
@@ -71,12 +73,18 @@ def load(
     if exclude:
         missing = [c for c in exclude if c not in raw_columns]
         if missing:
-            raise ValueError(
-                f"--exclude column(s) not in dataset: {missing}. "
-                f"Available: {raw_columns[:8]}..."
-            )
-        excl = ", ".join(_quote_ident(c) for c in exclude)
-        select_clause = f"* EXCLUDE ({excl})"
+            if ignore_missing_exclude:
+                exclude = [c for c in exclude if c in raw_columns]
+            else:
+                present = [c for c in exclude if c in raw_columns]
+                raise ValueError(
+                    f"--exclude column(s) not in dataset: {missing}. "
+                    f"Valid exclusions from this request: {present}. "
+                    f"Available: {raw_columns[:8]}..."
+                )
+        if exclude:
+            excl = ", ".join(_quote_ident(c) for c in exclude)
+            select_clause = f"* EXCLUDE ({excl})"
 
     where_clause = ""
     if where:
