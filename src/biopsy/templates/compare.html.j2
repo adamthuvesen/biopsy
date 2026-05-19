@@ -175,7 +175,7 @@
           <tr>
             <td><span class="severity-{{ f.severity }}">{{ f.severity }}</span></td>
             <td>{{ f.title | ticks }}</td>
-            <td>{{ f.detail }}</td>
+            <td>{{ f.detail | ticks }}</td>
           </tr>
           {% endfor %}
         </tbody>

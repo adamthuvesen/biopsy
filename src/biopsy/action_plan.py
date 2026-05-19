@@ -96,23 +96,20 @@ class ActionPlan:
         return out
 
 
+_SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
+_DROP_KINDS: frozenset[str] = frozenset({
+    "all_null", "constant", "near_constant", "identifier_shape",
+})
+_REVIEW_CATEGORIES = {"leakage", "temporal", "target"}
+# Fallback for older JSON profiles round-tripped before `Finding.kind` existed.
 _DROP_TITLE_MARKERS = (
     "is 100% null", "is constant", "is near-constant",
     "looks like an identifier",
 )
-_REVIEW_CATEGORIES = {"leakage", "temporal", "target"}
 
 
 def build_action_plan(prof: Profile) -> ActionPlan:
-    """Synthesize the modeling action plan from a profile.
-
-    Reads:
-      - `prof.findings` for drop / review / transform / impute hints
-      - `prof.columns` for null rates, skew, dtype, cardinality
-      - `prof.target` and `prof.target_summary` for class-imbalance strategy
-      - `prof.time_column` and `prof.temporal` for split recommendation
-      - `prof.clusters` for redundancy-aware drops
-    """
+    """Synthesize the modeling action plan from a profile."""
     drop: dict[str, ActionItem] = {}
     review: dict[str, ActionItem] = {}
     transform: dict[str, ActionItem] = {}
@@ -132,7 +129,10 @@ def build_action_plan(prof: Profile) -> ActionPlan:
 
         # --- drop bucket: empty, constant, near-constant, ID-shaped,
         #     critical quality ----------------------------------------------
-        if any(m in f.title for m in _DROP_TITLE_MARKERS):
+        is_drop_kind = f.kind in _DROP_KINDS or (
+            not f.kind and any(m in f.title for m in _DROP_TITLE_MARKERS)
+        )
+        if is_drop_kind:
             _add(drop, col, ActionItem(
                 column=col,
                 action="drop",
@@ -186,10 +186,10 @@ def build_action_plan(prof: Profile) -> ActionPlan:
             continue
 
         # --- encoded null sentinels → review (replace before profile) ------
-        if (
-            f.category == "quality"
-            and "encoded nulls" in f.title
-        ):
+        is_encoded_nulls = f.kind == "encoded_nulls" or (
+            not f.kind and "encoded nulls" in f.title
+        )
+        if is_encoded_nulls:
             _add(review, col, ActionItem(
                 column=col,
                 action="replace_sentinel_with_null",
@@ -215,7 +215,19 @@ def build_action_plan(prof: Profile) -> ActionPlan:
         elif stats.kind in {"text", "bool"}:
             action = "mode"
         else:
-            # temporal / other: forward-fill is dataset-specific; leave to user
+            # temporal / other: forward-fill is dataset-specific. Surface it
+            # in the `review` bucket so the gap doesn't disappear silently.
+            review_reason = (
+                f"{stats.null_rate:.0%} of rows are null on a {stats.kind} column — "
+                "biopsy cannot recommend an impute strategy automatically."
+            )
+            _add(review, stats.name, ActionItem(
+                column=stats.name,
+                action="impute_manually",
+                reason=review_reason,
+                severity="warning" if stats.null_rate > 0.1 else "info",
+                evidence=[review_reason],
+            ))
             continue
         reason = f"{stats.null_rate:.0%} of rows are null"
         _add(impute, stats.name, ActionItem(
@@ -280,18 +292,18 @@ def build_action_plan(prof: Profile) -> ActionPlan:
 
 
 def _bucket_label(bucket: Any) -> str:
-    """TimeBucket dataclass or (label, count) tuple — pull out the label."""
-    if hasattr(bucket, "label"):
-        return str(bucket.label)
-    return str(bucket[0])
+    return str(bucket.label)
 
 
 def _add(bucket: dict[str, ActionItem], col: str, item: ActionItem) -> None:
-    """First-wins per column; merge evidence when an item already exists."""
+    """Merge with the existing item if any; keep the strongest severity."""
     existing = bucket.get(col)
     if existing is None:
         bucket[col] = item
         return
+    if _SEVERITY_RANK[item.severity] < _SEVERITY_RANK[existing.severity]:
+        existing.severity = item.severity
+        existing.reason = item.reason
     for ev in item.evidence:
         if ev not in existing.evidence:
             existing.evidence.append(ev)
@@ -473,7 +485,9 @@ def to_sklearn_pipeline_code(prof: Profile, plan: ActionPlan | None = None) -> s
         return f"[{joined}]"
 
     numeric_impute_strategy = "median"
-    categorical_impute_strategy = "most_frequent"
+    # "constant" with fill_value="__missing__" keeps OneHotEncoder's unknown
+    # bucket stable; "most_frequent" silently ignores fill_value.
+    categorical_impute_strategy = "constant"
     # If most numeric columns chose mean per the plan, switch; else default to median.
     numeric_modes = [impute_kind.get(c, "median") for c in buckets["numeric"]]
     if numeric_modes and numeric_modes.count("mean") > numeric_modes.count("median"):
@@ -521,6 +535,7 @@ NUMERIC_COLS = {py_list(buckets["numeric"])}
 BOOLEAN_COLS = {py_list(buckets["boolean"])}
 CATEGORICAL_LOW_COLS = {py_list(buckets["categorical_low"])}
 CATEGORICAL_HIGH_COLS = {py_list(buckets["categorical_high"])}
+PASSTHROUGH_COLS = {py_list(buckets["passthrough"])}
 DROPPED_COLS = {py_list(buckets["drop"])}
 
 
@@ -563,6 +578,7 @@ def build_preprocessor() -> ColumnTransformer:
             ("boolean", boolean, BOOLEAN_COLS),
             ("cat_low", cat_low, CATEGORICAL_LOW_COLS),
             ("cat_high", cat_high, CATEGORICAL_HIGH_COLS),
+            ("passthrough", "passthrough", PASSTHROUGH_COLS),
         ],
         remainder="drop",
         verbose_feature_names_out=False,

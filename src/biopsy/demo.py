@@ -71,7 +71,8 @@ def synthetic_dataframe(n: int = 5000, seed: int = 42) -> dict[str, list]:
 
     # Heavy skew + outliers
     revenue = (np.exp(rng.normal(3, 1.5, n)) * (plan != "free")).astype(float)
-    revenue[rng.choice(n, 20, replace=False)] *= 50
+    n_outliers = max(1, int(n * 0.004))
+    revenue[rng.choice(n, n_outliers, replace=False)] *= 50
 
     return {
         "user_id": list(range(1, n + 1)),

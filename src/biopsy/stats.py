@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 from biopsy.io import Source, kind_of
 from biopsy.io import _quote_ident as _quote
+
+
+_NUMERIC_TYPES: tuple[type, ...] = (int, float, np.integer, np.floating)
 
 
 @dataclass
@@ -57,12 +62,12 @@ class ColumnStats:
 
     @property
     def is_near_constant(self) -> bool:
-        # one value dominates >99% of non-nulls
         if not self.top_values or self.n - self.n_null == 0:
             return False
         top_count = self.top_values[0][1]
-        if not isinstance(top_count, (int, float)):
-            return False  # temporal columns store (min/max, datestr) pairs here
+        # Temporal columns store (min/max, datestr) pairs in top_values; skip.
+        if not isinstance(top_count, _NUMERIC_TYPES):
+            return False
         return top_count / (self.n - self.n_null) > 0.99
 
 
@@ -97,26 +102,44 @@ def compute_column(
     )
 
     if kind == "numeric" and n_nonnull > 0:
+        # One scan: aggregates + quantiles + IQR-outlier count + sign counts.
+        # The CTE binds the quantile vector once so the outlier predicate can
+        # reference it without recomputing.
         row = src.con.execute(f"""
+            WITH q AS (
+                SELECT quantile_cont({col}, [0.01, 0.25, 0.5, 0.75, 0.99]) AS qs
+                FROM data
+            ),
+            bounds AS (
+                SELECT
+                    qs[2] AS q25, qs[4] AS q75,
+                    qs[2] - 1.5 * (qs[4] - qs[2]) AS lo,
+                    qs[4] + 1.5 * (qs[4] - qs[2]) AS hi
+                FROM q
+            )
             SELECT
                 AVG({col})::DOUBLE,
                 STDDEV_SAMP({col})::DOUBLE,
                 MIN({col})::DOUBLE,
-                quantile_cont({col}, 0.01)::DOUBLE,
-                quantile_cont({col}, 0.25)::DOUBLE,
-                quantile_cont({col}, 0.50)::DOUBLE,
-                quantile_cont({col}, 0.75)::DOUBLE,
-                quantile_cont({col}, 0.99)::DOUBLE,
+                (SELECT qs[1] FROM q)::DOUBLE,
+                (SELECT q25 FROM bounds)::DOUBLE,
+                (SELECT qs[3] FROM q)::DOUBLE,
+                (SELECT q75 FROM bounds)::DOUBLE,
+                (SELECT qs[5] FROM q)::DOUBLE,
                 MAX({col})::DOUBLE,
                 skewness({col})::DOUBLE,
                 kurtosis({col})::DOUBLE,
                 SUM(CASE WHEN {col} = 0 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN {col} < 0 THEN 1 ELSE 0 END)
+                SUM(CASE WHEN {col} < 0 THEN 1 ELSE 0 END),
+                SUM(CASE
+                    WHEN (SELECT q75 - q25 FROM bounds) > 0
+                     AND ({col} < (SELECT lo FROM bounds) OR {col} > (SELECT hi FROM bounds))
+                    THEN 1 ELSE 0 END)
             FROM data
         """).fetchone()
         (stats.mean, stats.std, stats.min, stats.p01, stats.p25, stats.p50,
          stats.p75, stats.p99, stats.max, stats.skew, stats.kurtosis,
-         stats.n_zero, stats.n_negative) = row
+         stats.n_zero, stats.n_negative, stats.n_outliers_iqr) = row
         top = src.con.execute(f"""
             SELECT {col}::VARCHAR, COUNT(*) AS c
             FROM data
@@ -131,16 +154,9 @@ def compute_column(
             stats.skew = None
             stats.kurtosis = None
 
-        if stats.p25 is not None and stats.p75 is not None:
-            iqr = stats.p75 - stats.p25
-            if iqr > 0:
-                lo = stats.p25 - 1.5 * iqr
-                hi = stats.p75 + 1.5 * iqr
-                stats.n_outliers_iqr = src.con.execute(
-                    f"SELECT COUNT(*) FROM data WHERE {col} < ? OR {col} > ?", [lo, hi]
-                ).fetchone()[0]
-
-        stats.histogram = _numeric_histogram(src, name, hist_bins)
+        stats.histogram = _numeric_histogram(
+            src, name, hist_bins, lo=stats.min, hi=stats.max,
+        )
 
     elif kind in {"text", "bool", "other"} and n_nonnull > 0:
         top = src.con.execute(f"""
@@ -191,28 +207,44 @@ def compute_column(
     return stats
 
 
-def _numeric_histogram(src: Source, name: str, bins: int) -> list[tuple[float, float, int]]:
+def _numeric_histogram(
+    src: Source,
+    name: str,
+    bins: int,
+    *,
+    lo: float | None = None,
+    hi: float | None = None,
+) -> list[tuple[float, float, int]]:
     """Equal-width histogram via DuckDB.
 
-    Falls back to a single bin when min == max.
+    Falls back to a single bin when min == max. NaN doubles are excluded so
+    bin counts sum to `n_nonnull`.
     """
     col = _quote(name)
-    row = src.con.execute(
-        f"SELECT MIN({col})::DOUBLE, MAX({col})::DOUBLE FROM data WHERE {col} IS NOT NULL"
-    ).fetchone()
-    lo, hi = row
+    where = f"{col} IS NOT NULL AND NOT isnan({col}::DOUBLE)"
+    if lo is None or hi is None:
+        row = src.con.execute(
+            f"SELECT MIN({col})::DOUBLE, MAX({col})::DOUBLE FROM data WHERE {where}"
+        ).fetchone()
+        lo, hi = row
     if lo is None or hi is None:
         return []
     if lo == hi:
-        c = src.con.execute(f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]).fetchone()[0]
+        c = src.con.execute(
+            f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]
+        ).fetchone()[0]
         return [(lo, hi, c)]
 
     width = (hi - lo) / bins
-    # bucket via floor((x - lo) / width), clipped to [0, bins-1]
+    # bucket via floor((x - lo) / width), clipped to [0, bins-1]; GREATEST
+    # guards floating-point underflow at x == lo producing a negative bin.
     rows = src.con.execute(f"""
         WITH b AS (
-            SELECT LEAST(CAST(FLOOR(({col}::DOUBLE - ?) / ?) AS INTEGER), ?) AS bin
-            FROM data WHERE {col} IS NOT NULL
+            SELECT GREATEST(
+                0,
+                LEAST(CAST(FLOOR(({col}::DOUBLE - ?) / ?) AS INTEGER), ?)
+            ) AS bin
+            FROM data WHERE {where}
         )
         SELECT bin, COUNT(*) FROM b GROUP BY bin ORDER BY bin
     """, [lo, width, bins - 1]).fetchall()

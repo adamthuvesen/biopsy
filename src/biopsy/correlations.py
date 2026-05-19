@@ -17,7 +17,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from biopsy.io import Source
-from biopsy.matrix import SampleCache
+from biopsy.matrix import SampleCache, _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
 
 
@@ -46,14 +46,32 @@ class CorrelationPair:
         return self.mutual_info - abs(self.pearson) > 0.15
 
 
-def pearson_matrix(src: Source, stats: dict[str, ColumnStats]) -> dict[tuple[str, str], float]:
-    """Pearson via DuckDB's corr() — fast, no row transfer."""
+def pearson_matrix(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    *,
+    max_cols: int | None = None,
+    priority_features: list[str] | None = None,
+) -> dict[tuple[str, str], float]:
+    """Pearson via DuckDB's corr() — fast, no row transfer.
+
+    When `max_cols` is set, restricts the pairwise pass to the top-N numeric
+    columns, preferring those listed in `priority_features`. This cuts the
+    O(n²) corr() projection on wide datasets — at 500 numeric columns the
+    uncapped pass builds ~125k aggregates per row scan.
+    """
     numeric = [n for n, s in stats.items() if s.kind == "numeric" and not s.is_constant]
+    if max_cols is not None and len(numeric) > max_cols:
+        if priority_features:
+            priority = [c for c in priority_features if c in numeric]
+            rest = [c for c in numeric if c not in priority]
+            numeric = (priority + rest)[:max_cols]
+        else:
+            numeric = numeric[:max_cols]
     pairs: dict[tuple[str, str], float] = {}
     if len(numeric) < 2:
         return pairs
 
-    # one SQL per pair is cheap on a single-table scan; DuckDB caches columns
     select_parts = []
     keys = []
     for i, a in enumerate(numeric):
@@ -71,13 +89,12 @@ def pearson_matrix(src: Source, stats: dict[str, ColumnStats]) -> dict[tuple[str
 
 def _valid_mask(values: np.ndarray) -> np.ndarray:
     """Boolean mask of non-null entries in an object/numeric array."""
-    out = np.empty(len(values), dtype=bool)
-    for i, v in enumerate(values):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            out[i] = False
-        else:
-            out[i] = True
-    return out
+    # pandas.isna handles None, float NaN, NaT, and pd.NA uniformly across
+    # object/numeric/datetime arrays. ~5–20× faster than the per-row loop
+    # for the 10k–50k samples typical here.
+    import pandas as pd
+
+    return ~np.asarray(pd.isna(values), dtype=bool)
 
 
 def _encode(values: np.ndarray, kind: str) -> tuple[np.ndarray, bool]:
@@ -123,43 +140,66 @@ def mutual_info_matrix(
 
     if sample_cache is None:
         quoted = ", ".join(_quote(c) for c in eligible)
-        sample = src.con.execute(
-            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-        ).fetchall()
-        if not sample:
+        raw = _fetch_object_array(
+            src.con,
+            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+            eligible,
+        )
+        if raw.size == 0:
             return {}
-        raw = np.array(sample, dtype=object)
     else:
         _cols, raw = sample_cache.fetch(eligible, max_rows=max_rows)
     if raw.size == 0:
         return {}
     masks = [_valid_mask(raw[:, j]) for j in range(len(eligible))]
 
+    pair_args: list[tuple[str, str, int, int]] = [
+        (eligible[i], eligible[j], i, j)
+        for i in range(len(eligible))
+        for j in range(i + 1, len(eligible))
+    ]
     pairs: dict[tuple[str, str], float] = {}
-    for i, a in enumerate(eligible):
-        for j_off, b in enumerate(eligible[i + 1:], start=i + 1):
-            valid = masks[i] & masks[j_off]
-            if valid.sum() < 30:
-                continue
-            ea, da = _encode(raw[valid, i], stats[a].kind)
-            eb, db = _encode(raw[valid, j_off], stats[b].kind)
+    if not pair_args:
+        return pairs
 
-            X = ea.reshape(-1, 1)
-            try:
-                if db:
-                    mi = mutual_info_classif(
-                        X, eb.astype(int), discrete_features=[da], random_state=42
-                    )[0]
-                else:
-                    mi = mutual_info_regression(
-                        X, eb, discrete_features=[da], random_state=42
-                    )[0]
-            except ValueError:
-                # sklearn raises ValueError for degenerate inputs (single sample
-                # per class, all-NaN, etc.). Skip the pair rather than abort.
-                continue
-            mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
-            pairs[(a, b)] = mi_norm
+    def _mi_pair(a: str, b: str, i: int, j: int) -> tuple[str, str, float | None]:
+        valid = masks[i] & masks[j]
+        if valid.sum() < 30:
+            return a, b, None
+        ea, da = _encode(raw[valid, i], stats[a].kind)
+        eb, db = _encode(raw[valid, j], stats[b].kind)
+        try:
+            if db:
+                mi = mutual_info_classif(
+                    ea.reshape(-1, 1), eb.astype(int),
+                    discrete_features=[da], random_state=42,
+                )[0]
+            else:
+                mi = mutual_info_regression(
+                    ea.reshape(-1, 1), eb, discrete_features=[da], random_state=42,
+                )[0]
+        except ValueError:
+            # sklearn raises ValueError for degenerate inputs (single sample
+            # per class, all-NaN, etc.). Skip the pair rather than abort.
+            return a, b, None
+        return a, b, float(1 - np.exp(-2 * max(mi, 0)))
+
+    # Parallelize when the pair count justifies the joblib fork overhead.
+    # 64 pairs ≈ 12 columns; sklearn's MI on a single pair is fast enough that
+    # smaller problems are net slower with multi-process dispatch.
+    results: list[tuple[str, str, float | None]]
+    if len(pair_args) >= 64:
+        from joblib import Parallel, delayed
+
+        results = Parallel(n_jobs=-1, prefer="processes")(
+            delayed(_mi_pair)(a, b, i, j) for a, b, i, j in pair_args
+        )
+    else:
+        results = [_mi_pair(*args) for args in pair_args]
+
+    for a, b, value in results:
+        if value is not None:
+            pairs[(a, b)] = value
     return pairs
 
 
@@ -172,7 +212,9 @@ def correlation_pairs(
     max_cols: int | None = None,
     priority_features: list[str] | None = None,
 ) -> list[CorrelationPair]:
-    pearson = pearson_matrix(src, stats)
+    pearson = pearson_matrix(
+        src, stats, max_cols=max_cols, priority_features=priority_features,
+    )
     mi = (
         mutual_info_matrix(
             src, stats,
@@ -400,16 +442,15 @@ def target_signal(
 ) -> list[TargetSignal]:
     """Rank features by association with the target.
 
-    For numeric targets: MI regression. For low-cardinality targets: MI classification.
-    Pearson is computed too when both are numeric.
+    For numeric targets: MI regression + PPS regression. For low-cardinality
+    targets: MI classification + PPS classification + (binary only) AUC. Adds
+    Spearman for numeric features, plus multivariate permutation importance.
     """
     if target not in stats:
         raise ValueError(f"Target column not found: {target}")
+    from biopsy.temporal import _target_kind  # local import: temporal already imports correlations
     t_stats = stats[target]
-    target_kind = "classification" if (
-        t_stats.kind in {"text", "bool"} or
-        (t_stats.kind == "numeric" and t_stats.n_unique <= 20)
-    ) else "regression"
+    target_kind = _target_kind(t_stats)
 
     features = [
         n for n, s in stats.items()
@@ -420,19 +461,17 @@ def target_signal(
     if not features:
         return []
 
-    quoted = ", ".join(_quote(c) for c in features + [target])
-    sample = _target_sample(
+    raw = _target_sample(
         src=src,
-        quoted=quoted,
+        cols=[*features, target],
         target=target,
         target_kind=target_kind,
         n_unique=t_stats.n_unique,
         max_rows=max_rows,
         stratify=stratify,
     )
-    if len(sample) < 30:
+    if raw.shape[0] < 30:
         return []
-    raw = np.array(sample, dtype=object)
     target_mask = _valid_mask(raw[:, -1])
 
     if target_kind == "classification":
@@ -492,11 +531,15 @@ def target_signal(
             if auc_pair is not None:
                 raw_auc, auc = auc_pair
 
+        minority_count = None
+        if is_binary_target:
+            counts = np.bincount(y_sub.astype(int), minlength=2)
+            minority_count = int(counts.min())
         signals.append(TargetSignal(
             feature=feat, score=pps_score, mutual_info=mi_norm, method=method,
             spearman=spearman, auc=auc, raw_auc=raw_auc,
             support=int(feat_mask.sum()),
-            positive_count=int(y_sub.astype(int).sum()) if is_binary_target else None,
+            positive_count=minority_count,
         ))
         feat_records.append((feat, x_enc, x_disc, feat_mask))
 
@@ -538,22 +581,23 @@ def target_signal(
 
 def _target_sample(
     src: Source,
-    quoted: str,
+    cols: list[str],
     target: str,
     target_kind: str,
     n_unique: int,
     max_rows: int,
     stratify: bool,
-) -> list[tuple]:
-    """Pull target-analysis rows.
+) -> np.ndarray:
+    """Pull target-analysis rows as a 2D object array (column order = cols).
 
     For low-cardinality classification targets, use deterministic per-class
     sampling so rare positives do not disappear from the analysis sample.
     """
+    quoted = ", ".join(_quote(c) for c in cols)
     qtarget = _quote(target)
     if stratify and target_kind == "classification" and 1 < n_unique <= 20:
         per_class = max(1, max_rows // n_unique)
-        return src.con.execute(f"""
+        sql = f"""
             WITH labeled AS (
                 SELECT row_number() OVER () AS __biopsy_rowid, {quoted}
                 FROM data
@@ -570,12 +614,14 @@ def _target_sample(
             SELECT {quoted}
             FROM ranked
             WHERE __biopsy_rank <= {int(per_class)}
-        """).fetchall()
-    return src.con.execute(
-        f"SELECT {quoted} FROM ("
-        f"SELECT {quoted} FROM data WHERE {qtarget} IS NOT NULL"
-        f") USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-    ).fetchall()
+        """
+    else:
+        sql = (
+            f"SELECT {quoted} FROM ("
+            f"SELECT {quoted} FROM data WHERE {qtarget} IS NOT NULL"
+            f") USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+        )
+    return _fetch_object_array(src.con, sql, cols)
 
 
 def _attach_permutation_importance(
@@ -711,30 +757,24 @@ def _attach_uncertainty(
                 s.mi_ci_high = float(np.quantile(mis, 0.975))
 
         # --- multi-seed PPS stability ---
+        # Bootstrap-resample (x, y) pairs together so sample composition
+        # genuinely changes; joint-permutation of (x, y) by the same index
+        # would just re-order pairs and PPS would be invariant.
         if n_pps_seeds > 1:
             scores: list[float] = []
-            X = x_enc.reshape(-1, 1)
             for seed in range(n_pps_seeds):
-                idx = np.random.default_rng(seed).permutation(n)
-                y_p = y_sub[idx]
-                x_p = x_enc[idx].reshape(-1, 1)
+                rng_seed = np.random.default_rng(seed)
+                idx = rng_seed.integers(0, n, size=n)
+                x_b = x_enc[idx].reshape(-1, 1)
+                y_b = y_sub[idx]
                 try:
                     if target_kind == "classification":
-                        score = _pps_classification(x_p, y_p.astype(int))
+                        score = _pps_classification(x_b, y_b.astype(int))
                     else:
-                        score = _pps_regression(x_p, y_p)
+                        score = _pps_regression(x_b, y_b)
                 except ValueError:
                     continue
                 scores.append(score)
-            # Re-run the un-permuted PPS for the "real" measurement too.
-            try:
-                if target_kind == "classification":
-                    real = _pps_classification(X, y_sub.astype(int))
-                else:
-                    real = _pps_regression(X, y_sub)
-                scores.append(real)
-            except ValueError:
-                pass
             if len(scores) >= 2:
                 arr = np.asarray(scores, dtype=float)
                 mean = float(arr.mean())

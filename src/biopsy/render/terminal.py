@@ -253,7 +253,7 @@ def _target_panel(prof: Profile) -> Panel:
             _fmt_unsigned(s.raw_auc),
             _fmt_unsigned(s.auc),
             _fmt_unsigned(s.perm_importance),
-            f"{s.support:,}" if s.support else "—",
+            f"{s.support:,}",
             conf_disp,
             bar,
             note,

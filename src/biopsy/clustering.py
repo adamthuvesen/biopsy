@@ -17,10 +17,11 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
+from scipy.stats import rankdata
 
 from biopsy.correlations import TargetSignal, _valid_mask
 from biopsy.io import Source
-from biopsy.matrix import SampleCache
+from biopsy.matrix import SampleCache, _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
 
 DEFAULT_CUTOFF = 0.30          # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
@@ -88,12 +89,13 @@ def _spearman_distance_matrix(
 
     if sample_cache is None:
         quoted = ", ".join(_quote(c) for c in feature_names)
-        sample = src.con.execute(
-            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-        ).fetchall()
-        if not sample:
+        raw = _fetch_object_array(
+            src.con,
+            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+            feature_names,
+        )
+        if raw.size == 0:
             return np.empty((0, 0)), feature_names
-        raw = np.array(sample, dtype=object)
     else:
         _cols, raw = sample_cache.fetch(feature_names, max_rows=max_rows)
     if raw.size == 0:
@@ -110,9 +112,10 @@ def _spearman_distance_matrix(
             continue
         clean = np.asarray(col_raw[mask], dtype=np.float64)
         median = float(np.median(clean))
-        full = np.full(raw.shape[0], median, dtype=np.float64)
+        full = np.empty(raw.shape[0], dtype=np.float64)
         full[mask] = clean
-        ranks[:, j] = _rank(full)
+        full[~mask] = median
+        ranks[:, j] = rankdata(full, method="average")
         valid_cols.append(j)
 
     if len(valid_cols) < 2:
@@ -132,27 +135,6 @@ def _spearman_distance_matrix(
     return distance, kept
 
 
-def _rank(x: np.ndarray) -> np.ndarray:
-    """Average-rank transform — handles ties by giving them the mean of their span."""
-    order = np.argsort(x, kind="stable")
-    ranks = np.empty_like(x, dtype=np.float64)
-    ranks[order] = np.arange(1, len(x) + 1, dtype=np.float64)
-    # tie-correct: replace tied groups with their mean rank
-    # (matches scipy.stats.rankdata 'average')
-    sorted_x = x[order]
-    i = 0
-    n = len(x)
-    while i < n:
-        j = i + 1
-        while j < n and sorted_x[j] == sorted_x[i]:
-            j += 1
-        if j - i > 1:
-            mean_rank = (i + j + 1) / 2
-            ranks[order[i:j]] = mean_rank
-        i = j
-    return ranks
-
-
 def _build_clusters(
     distance: np.ndarray,
     feature_names: list[str],
@@ -161,11 +143,14 @@ def _build_clusters(
     """Hierarchical clustering with average linkage; cut at `cutoff`."""
     n = len(feature_names)
     if n < 2:
-        return [
-            Cluster(cluster_id=1, members=feature_names, representative=feature_names[0],
-                    mean_abs_correlation=1.0)
-            for _ in [None] if feature_names
-        ]
+        if not feature_names:
+            return []
+        return [Cluster(
+            cluster_id=1,
+            members=feature_names,
+            representative=feature_names[0],
+            mean_abs_correlation=1.0,
+        )]
     condensed = squareform(distance, checks=False)
     Z = linkage(condensed, method="average")
     labels = fcluster(Z, t=cutoff, criterion="distance")
@@ -190,10 +175,12 @@ def _build_clusters(
             sub = abs_corr[np.ix_(member_ids, member_ids)]
             mask = ~np.eye(len(member_ids), dtype=bool)
             mean_corr = float(sub[mask].mean()) if mask.any() else 1.0
+        # `representative` is overwritten by _pick_representatives once
+        # target signals are available; members[0] is a placeholder.
         clusters.append(Cluster(
             cluster_id=len(clusters) + 1,
             members=members,
-            representative=members[0],  # provisional — finalized later
+            representative=members[0],
             mean_abs_correlation=mean_corr,
         ))
     return clusters

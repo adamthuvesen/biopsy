@@ -23,11 +23,12 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.stats import chi2_contingency, ks_2samp
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import chi2_contingency, kstwo, wasserstein_distance
 
 from biopsy.findings import Finding
 from biopsy.profile import Profile
-from biopsy.stats import ColumnStats
+from biopsy.stats import ColumnStats, _NUMERIC_TYPES
 
 # --- thresholds ------------------------------------------------------------
 KS_CRITICAL = 0.20
@@ -165,63 +166,95 @@ def _numeric_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDrift:
     if sa.mean is not None and sb.mean is not None:
         drift.mean_delta = sb.mean - sa.mean
 
-    samples_a = _samples_from_histogram(sa)
-    samples_b = _samples_from_histogram(sb)
-    if samples_a.size >= 30 and samples_b.size >= 30:
-        ks = ks_2samp(samples_a, samples_b, alternative="two-sided", method="auto")
-        drift.ks_stat = float(ks.statistic)
-        drift.ks_pvalue = float(ks.pvalue)
-        drift.wasserstein = float(_wasserstein_1d(samples_a, samples_b))
-        drift.psi = float(_psi(samples_a, samples_b))
+    rebinned = _rebin_to_union(sa, sb)
+    if rebinned is None:
+        return drift
+    edges, counts_a, counts_b = rebinned
+    n_a = int(counts_a.sum())
+    n_b = int(counts_b.sum())
+    if n_a < 30 or n_b < 30:
+        return drift
+
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    p_a = counts_a / n_a
+    p_b = counts_b / n_b
+
+    # KS on bin-derived CDFs — the statistic is the supremum of |F_a - F_b|
+    # across the bin boundaries. The p-value uses the asymptotic Kolmogorov
+    # distribution with the *original* sample sizes, not the synthetic
+    # rehydrated ones the old path produced.
+    cdf_a = np.cumsum(p_a)
+    cdf_b = np.cumsum(p_b)
+    ks_stat = float(np.max(np.abs(cdf_a - cdf_b)))
+    drift.ks_stat = ks_stat
+    n_eff = (n_a * n_b) / (n_a + n_b)
+    if n_eff > 0:
+        drift.ks_pvalue = float(kstwo.sf(ks_stat, max(int(round(n_eff)), 1)))
+
+    drift.wasserstein = float(
+        wasserstein_distance(centers, centers, p_a, p_b)
+    )
+    drift.psi = _psi_from_probs(p_a, p_b)
     return drift
 
 
-def _samples_from_histogram(stats: ColumnStats) -> np.ndarray:
-    """Synthesize a sample by repeating each bin midpoint by its count.
+def _rebin_to_union(
+    sa: ColumnStats, sb: ColumnStats,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Rebin both histograms onto a common edge grid spanning the union range.
 
-    Used only as a histogram-derived approximation for KS / Wasserstein /
-    PSI; the original raw data is not retained on a Profile.
+    Returns (edges, counts_a, counts_b). Each side's mass is redistributed
+    proportionally across the overlap between its source bins and the
+    target bins, so total counts are preserved.
     """
-    if not stats.histogram:
-        return np.empty(0, dtype=float)
-    midpoints: list[float] = []
-    counts: list[int] = []
-    for lo, hi, c in stats.histogram:
-        if c <= 0:
+    if not sa.histogram or not sb.histogram:
+        return None
+    lo = min(sa.histogram[0][0], sb.histogram[0][0])
+    hi = max(sa.histogram[-1][1], sb.histogram[-1][1])
+    if not (lo < hi):
+        return None
+    n_bins = max(len(sa.histogram), len(sb.histogram))
+    edges = np.linspace(lo, hi, n_bins + 1)
+    return edges, _rebin(sa.histogram, edges), _rebin(sb.histogram, edges)
+
+
+def _rebin(
+    histogram: list[tuple[float, float, int]],
+    edges: np.ndarray,
+) -> np.ndarray:
+    """Redistribute histogram bin counts onto `edges` (preserving total count)."""
+    out = np.zeros(len(edges) - 1, dtype=np.float64)
+    for src_lo, src_hi, count in histogram:
+        if count <= 0 or not (src_hi > src_lo):
             continue
-        midpoints.append(0.5 * (lo + hi))
-        counts.append(int(c))
-    if not midpoints:
-        return np.empty(0, dtype=float)
-    return np.repeat(np.asarray(midpoints, dtype=float), counts)
+        width = src_hi - src_lo
+        # find overlap with each target bin
+        i_lo = int(np.searchsorted(edges, src_lo, side="right") - 1)
+        i_hi = int(np.searchsorted(edges, src_hi, side="left"))
+        i_lo = max(0, min(i_lo, len(out) - 1))
+        i_hi = max(i_lo, min(i_hi, len(out)))
+        for i in range(i_lo, i_hi + 1):
+            if i >= len(out):
+                break
+            ov_lo = max(src_lo, edges[i])
+            ov_hi = min(src_hi, edges[i + 1])
+            if ov_hi <= ov_lo:
+                continue
+            out[i] += count * (ov_hi - ov_lo) / width
+    return out
 
 
-def _wasserstein_1d(a: np.ndarray, b: np.ndarray) -> float:
-    """Earth-mover distance between two 1D samples via the CDF integral."""
-    a_sorted = np.sort(a)
-    b_sorted = np.sort(b)
-    all_vals = np.concatenate([a_sorted, b_sorted])
-    all_vals.sort()
-    cdf_a = np.searchsorted(a_sorted, all_vals, side="right") / len(a_sorted)
-    cdf_b = np.searchsorted(b_sorted, all_vals, side="right") / len(b_sorted)
-    deltas = np.diff(all_vals)
-    return float(np.sum(np.abs(cdf_a[:-1] - cdf_b[:-1]) * deltas))
-
-
-def _psi(a: np.ndarray, b: np.ndarray, bins: int = 10) -> float:
-    """Population Stability Index on quantile bins of `a`."""
-    if len(a) < bins or len(b) < bins:
+def _psi_from_probs(p_a: np.ndarray, p_b: np.ndarray) -> float:
+    """Population Stability Index on aligned bin probabilities."""
+    # Laplace smoothing matches the original codepath; prevents log(0) when
+    # one side has an empty bin the other side populates.
+    n_bins = len(p_a)
+    if n_bins < 3:
         return 0.0
-    quantiles = np.linspace(0, 1, bins + 1)
-    edges = np.quantile(a, quantiles)
-    edges = np.unique(edges)
-    if len(edges) < 3:
-        return 0.0
-    a_counts, _ = np.histogram(a, bins=edges)
-    b_counts, _ = np.histogram(b, bins=edges)
-    a_prop = (a_counts + 1) / (a_counts.sum() + len(a_counts))
-    b_prop = (b_counts + 1) / (b_counts.sum() + len(b_counts))
-    return float(np.sum((b_prop - a_prop) * np.log(b_prop / a_prop)))
+    eps = 1.0 / max(n_bins, 1)
+    a = (p_a + eps) / (1.0 + n_bins * eps)
+    b = (p_b + eps) / (1.0 + n_bins * eps)
+    return float(np.sum((b - a) * np.log(b / a)))
 
 
 # --- categorical ----------------------------------------------------------
@@ -265,36 +298,26 @@ def _categorical_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDri
     if contingency.shape[1] >= 2:
         # chi2_contingency raises on degenerate tables; treat as no signal.
         try:
-            res = chi2_contingency(contingency)
-            drift.chi2_pvalue = float(res.pvalue)
+            _chi2, p_value, _dof, _expected = chi2_contingency(contingency)
+            drift.chi2_pvalue = float(p_value)
         except ValueError:
             drift.chi2_pvalue = None
     p = a_vec / a_vec.sum()
     q = b_vec / b_vec.sum()
-    drift.js_divergence = float(_jensen_shannon(p, q))
+    # scipy.spatial.distance.jensenshannon returns the JS *distance* (sqrt of
+    # divergence); square it to recover divergence with natural-log base.
+    js_distance = float(jensenshannon(p, q, base=math.e))
+    drift.js_divergence = js_distance * js_distance
     return drift
 
 
 def _normalize_top(items: list[tuple[object, int]]) -> list[tuple[str, int]]:
     out: list[tuple[str, int]] = []
     for k, c in items:
-        if not isinstance(c, (int, float)):
+        if not isinstance(c, _NUMERIC_TYPES):
             continue
         out.append((str(k), int(c)))
     return out
-
-
-def _jensen_shannon(p: np.ndarray, q: np.ndarray) -> float:
-    p = p + 1e-12
-    q = q + 1e-12
-    p = p / p.sum()
-    q = q / q.sum()
-    m = 0.5 * (p + q)
-    return 0.5 * (_kl(p, m) + _kl(q, m))
-
-
-def _kl(p: np.ndarray, q: np.ndarray) -> float:
-    return float(np.sum(p * np.log(p / q)))
 
 
 # --- other (temporal / unknown) -------------------------------------------

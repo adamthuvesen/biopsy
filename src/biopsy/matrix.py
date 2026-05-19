@@ -8,6 +8,35 @@ from biopsy.io import Source
 from biopsy.stats import _quote
 
 
+def _fetch_object_array(
+    con: object, sql: str, columns: list[str],
+) -> np.ndarray:
+    """Run `sql` and return rows as a 2D object array (cols match `columns`).
+
+    Prefers DuckDB's `fetchnumpy()` to skip the Python-tuple intermediate;
+    falls back to `fetchall()` for older bindings or non-DuckDB connections.
+    """
+    fetch_numpy = getattr(con.execute(sql), "fetchnumpy", None)
+    if callable(fetch_numpy):
+        try:
+            cols_dict = fetch_numpy()
+        except Exception:
+            cols_dict = None
+        if cols_dict:
+            try:
+                arrays = [np.asarray(cols_dict[c], dtype=object) for c in columns]
+            except KeyError:
+                arrays = None
+            if arrays is not None:
+                if arrays[0].size == 0:
+                    return np.empty((0, len(columns)), dtype=object)
+                return np.column_stack(arrays)
+    rows = con.execute(sql).fetchall()
+    if not rows:
+        return np.empty((0, len(columns)), dtype=object)
+    return np.array(rows, dtype=object)
+
+
 class SampleCache:
     """Cache one DuckDB reservoir sample and serve column subsets from it."""
 
@@ -27,20 +56,39 @@ class SampleCache:
             and set(columns).issubset(self._columns)
         ):
             idx = [self._columns.index(c) for c in columns]
-            return columns, self._raw[:, idx]
+            return columns, self._raw[:max_rows, idx]
+
+        # Superset miss at the same max_rows: pull only the missing columns
+        # (USING SAMPLE seed=42 is deterministic, so row alignment by position
+        # is safe) and hstack onto the cached array instead of re-sampling.
+        if (
+            self._raw is not None
+            and self._max_rows == max_rows
+            and self._raw.shape[0] > 0
+        ):
+            missing = [c for c in columns if c not in self._columns]
+            if missing:
+                quoted_missing = ", ".join(_quote(c) for c in missing)
+                new_block = _fetch_object_array(
+                    self.src.con,
+                    f"SELECT {quoted_missing} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+                    missing,
+                )
+                if new_block.shape[0] == self._raw.shape[0]:
+                    self._raw = np.hstack([self._raw, new_block])
+                    self._columns = [*self._columns, *missing]
+                    idx = [self._columns.index(c) for c in columns]
+                    return columns, self._raw[:max_rows, idx]
 
         cols = columns
         if self._raw is not None:
             cols = list(dict.fromkeys([*self._columns, *columns]))
 
         quoted = ", ".join(_quote(c) for c in cols)
-        rows = self.src.con.execute(
-            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)"
-        ).fetchall()
-        raw = (
-            np.array(rows, dtype=object)
-            if rows
-            else np.empty((0, len(cols)), dtype=object)
+        raw = _fetch_object_array(
+            self.src.con,
+            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+            cols,
         )
 
         self._columns = cols
@@ -48,4 +96,4 @@ class SampleCache:
         self._max_rows = max_rows
 
         idx = [self._columns.index(c) for c in columns]
-        return columns, raw[:, idx]
+        return columns, raw[:max_rows, idx]
