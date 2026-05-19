@@ -1,0 +1,26 @@
+# Postgres test fixture for biopsy warehouse integration tests.
+#
+# Usage:
+#   docker compose -f tests/docker-compose.postgres.yml up -d
+#   BIOPSY_TEST_POSTGRES=1 uv run pytest tests/test_warehouse_postgres.py
+#   docker compose -f tests/docker-compose.postgres.yml down -v
+#
+# Seeds two small tables — `biopsy.events` and `biopsy.users` — with
+# deterministic synthetic data sized for fast tests (~2k rows total).
+services:
+  biopsy-pg-test:
+    image: postgres:16-alpine
+    container_name: biopsy-pg-test
+    environment:
+      POSTGRES_USER: biopsy
+      POSTGRES_PASSWORD: biopsy_test
+      POSTGRES_DB: biopsy_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biopsy -d biopsy_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - ./fixtures/postgres_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
