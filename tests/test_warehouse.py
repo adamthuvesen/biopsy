@@ -14,6 +14,7 @@ import pytest
 
 from biopsy.warehouse import (
     SUPPORTED_SCHEMES,
+    AdapterResult,
     MissingCredentialError,
     parse_warehouse_uri,
     resolve_credentials,
@@ -235,6 +236,36 @@ class TestObjectStoreAdapter:
         # Sanity: secret-scope map covers the auth-required schemes.
         for scheme in {"s3", "s3a", "gs", "gcs"}:
             assert scheme in _SECRET_SCOPE
+
+
+def test_load_calls_adapter_cleanup_after_materializing_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import biopsy.warehouse.postgres as postgres
+    from biopsy.io import load
+
+    cleanup_calls = 0
+
+    def fake_open_postgres(*_args: object, **_kwargs: object) -> AdapterResult:
+        def cleanup() -> None:
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+
+        return AdapterResult(
+            qualified_name="postgres://host/db?table=public.events",
+            scan_sql="(SELECT 1 AS x)",
+            cleanup=cleanup,
+        )
+
+    monkeypatch.setattr(postgres, "open_postgres", fake_open_postgres)
+
+    src = load("postgres://host/db?table=public.events")
+    try:
+        assert src.n_rows == 1
+        assert src.columns == ["x"]
+        assert cleanup_calls == 1
+    finally:
+        src.con.close()
 
 
 # --- Serialization redaction (defense in depth) ---------------------------

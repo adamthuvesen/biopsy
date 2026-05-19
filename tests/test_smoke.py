@@ -647,6 +647,25 @@ def test_low_cardinality_time_column_reports_target_buckets(tmp_path: Path) -> N
     assert any("target-by-period" in f.detail.lower() for f in findings)
 
 
+def test_high_cardinality_time_buckets_are_capped(tmp_path: Path) -> None:
+    import csv as csv_module
+    from datetime import date, timedelta
+
+    p = tmp_path / "daily.csv"
+    start = date(2024, 1, 1)
+    with p.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["event_date", "x", "target"])
+        for i in range(1500):
+            w.writerow([start + timedelta(days=i), i, int(i >= 900)])
+
+    prof = profile(p, target="target", time_col="event_date")
+
+    assert prof.temporal is not None
+    assert len(prof.temporal.time_buckets) == 10
+    assert all(" - " in b.label for b in prof.temporal.time_buckets)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -1238,6 +1257,37 @@ def test_compare_detects_numeric_shift(tmp_path: Path) -> None:
     # The age finding should be among the top-3 drift findings.
     top_finding_cols = [f.columns[0] for f in report.findings if f.columns][:3]
     assert "age" in top_finding_cols
+
+
+def test_categorical_drift_skips_one_sided_low_top_coverage() -> None:
+    from biopsy.compare import _categorical_drift
+    from biopsy.stats import ColumnStats
+
+    a = ColumnStats(
+        name="segment",
+        dtype="VARCHAR",
+        kind="text",
+        n=1000,
+        n_null=0,
+        n_unique=100,
+        null_rate=0.0,
+        top_values=[(f"a{i}", 50) for i in range(10)],
+    )
+    b = ColumnStats(
+        name="segment",
+        dtype="VARCHAR",
+        kind="text",
+        n=1000,
+        n_null=0,
+        n_unique=400,
+        null_rate=0.0,
+        top_values=[(f"b{i}", 10) for i in range(10)],
+    )
+
+    drift = _categorical_drift("segment", a, b)
+
+    assert drift.js_divergence is None
+    assert drift.chi2_pvalue is None
 
 
 def test_split_recommendation_temporal_when_time_present(tmp_path: Path) -> None:

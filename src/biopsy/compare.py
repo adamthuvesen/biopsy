@@ -28,7 +28,7 @@ from scipy.stats import chi2_contingency, kstwo, wasserstein_distance
 
 from biopsy.findings import Finding
 from biopsy.profile import Profile
-from biopsy.stats import ColumnStats, _NUMERIC_TYPES
+from biopsy.stats import _NUMERIC_TYPES, ColumnStats
 
 # --- thresholds ------------------------------------------------------------
 KS_CRITICAL = 0.20
@@ -283,7 +283,7 @@ def _categorical_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDri
     # frequent in each sample.
     a_top_coverage = sum(a_counts.values()) / a_nonnull
     b_top_coverage = sum(b_counts.values()) / b_nonnull
-    if max(a_top_coverage, b_top_coverage) < 0.25:
+    if min(a_top_coverage, b_top_coverage) < 0.25:
         return drift
     keys.update(a_counts)
     keys.update(b_counts)

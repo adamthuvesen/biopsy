@@ -35,6 +35,7 @@ TARGET_DRIFT_BINARY_DIFF = 0.2     # 20 percentage points
 TARGET_DRIFT_REGRESSION_DIFF_SCALE = 1.0  # mean range >= 1 target-IQR/std
 MIN_ROWS = 1000
 MIN_TIME_VALUES = 10
+MAX_EXACT_TIME_BUCKETS = 14
 TEST_FRACTION = 0.3
 MIN_TEST_POSITIVES_CLASSIF = 30
 
@@ -543,14 +544,31 @@ def _time_bucket_summary(
     target: str | None,
 ) -> list[TimeBucket]:
     qtime = _quote(time_col)
+    use_deciles = stats[time_col].n_unique > MAX_EXACT_TIME_BUCKETS
     if target is None or target not in stats:
-        rows = src.con.execute(f"""
-            SELECT {qtime}::VARCHAR AS bucket, COUNT(*) AS n_rows
-            FROM data
-            WHERE {qtime} IS NOT NULL
-            GROUP BY 1
-            ORDER BY 1
-        """).fetchall()
+        if use_deciles:
+            rows = src.con.execute(f"""
+                WITH bucketed AS (
+                    SELECT *,
+                           ntile(10) OVER (ORDER BY {qtime}) AS __biopsy_bucket
+                    FROM data
+                    WHERE {qtime} IS NOT NULL
+                )
+                SELECT
+                    MIN({qtime})::VARCHAR || ' - ' || MAX({qtime})::VARCHAR AS bucket,
+                    COUNT(*) AS n_rows
+                FROM bucketed
+                GROUP BY __biopsy_bucket
+                ORDER BY __biopsy_bucket
+            """).fetchall()
+        else:
+            rows = src.con.execute(f"""
+                SELECT {qtime}::VARCHAR AS bucket, COUNT(*) AS n_rows
+                FROM data
+                WHERE {qtime} IS NOT NULL
+                GROUP BY 1
+                ORDER BY 1
+            """).fetchall()
         return [TimeBucket(label=str(label), n_rows=int(n_rows)) for label, n_rows in rows]
 
     t_stats = stats[target]
@@ -565,23 +583,42 @@ def _time_bucket_summary(
             return []
         positive_value = min(t_stats.top_values, key=lambda v_c: v_c[1])[0]
         pos = str(positive_value).replace("'", "''")
-        rows = src.con.execute(f"""
-            SELECT
-                {qtime}::VARCHAR AS bucket,
-                COUNT(*) AS n_rows,
-                COUNT({qtarget}) AS n_target,
-                AVG(
-                    CASE
-                        WHEN {qtarget} IS NULL THEN NULL
-                        WHEN {qtarget}::VARCHAR = '{pos}' THEN 1.0
-                        ELSE 0.0
-                    END
-                ) AS target_rate
-            FROM data
-            WHERE {qtime} IS NOT NULL
-            GROUP BY 1
-            ORDER BY 1
-        """).fetchall()
+        target_rate_sql = f"""
+            COUNT(*) AS n_rows,
+            COUNT({qtarget}) AS n_target,
+            AVG(
+                CASE
+                    WHEN {qtarget} IS NULL THEN NULL
+                    WHEN {qtarget}::VARCHAR = '{pos}' THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS target_rate
+        """
+        if use_deciles:
+            rows = src.con.execute(f"""
+                WITH bucketed AS (
+                    SELECT *,
+                           ntile(10) OVER (ORDER BY {qtime}) AS __biopsy_bucket
+                    FROM data
+                    WHERE {qtime} IS NOT NULL
+                )
+                SELECT
+                    MIN({qtime})::VARCHAR || ' - ' || MAX({qtime})::VARCHAR AS bucket,
+                    {target_rate_sql}
+                FROM bucketed
+                GROUP BY __biopsy_bucket
+                ORDER BY __biopsy_bucket
+            """).fetchall()
+        else:
+            rows = src.con.execute(f"""
+                SELECT
+                    {qtime}::VARCHAR AS bucket,
+                    {target_rate_sql}
+                FROM data
+                WHERE {qtime} IS NOT NULL
+                GROUP BY 1
+                ORDER BY 1
+            """).fetchall()
         return [
             TimeBucket(
                 label=str(label),
@@ -592,17 +629,35 @@ def _time_bucket_summary(
             for label, n_rows, n_target, target_rate in rows
         ]
 
-    rows = src.con.execute(f"""
-        SELECT
-            {qtime}::VARCHAR AS bucket,
-            COUNT(*) AS n_rows,
-            COUNT({qtarget}) AS n_target,
-            AVG({qtarget}::DOUBLE) AS target_mean
-        FROM data
-        WHERE {qtime} IS NOT NULL
-        GROUP BY 1
-        ORDER BY 1
-    """).fetchall()
+    if use_deciles:
+        rows = src.con.execute(f"""
+            WITH bucketed AS (
+                SELECT *,
+                       ntile(10) OVER (ORDER BY {qtime}) AS __biopsy_bucket
+                FROM data
+                WHERE {qtime} IS NOT NULL
+            )
+            SELECT
+                MIN({qtime})::VARCHAR || ' - ' || MAX({qtime})::VARCHAR AS bucket,
+                COUNT(*) AS n_rows,
+                COUNT({qtarget}) AS n_target,
+                AVG({qtarget}::DOUBLE) AS target_mean
+            FROM bucketed
+            GROUP BY __biopsy_bucket
+            ORDER BY __biopsy_bucket
+        """).fetchall()
+    else:
+        rows = src.con.execute(f"""
+            SELECT
+                {qtime}::VARCHAR AS bucket,
+                COUNT(*) AS n_rows,
+                COUNT({qtarget}) AS n_target,
+                AVG({qtarget}::DOUBLE) AS target_mean
+            FROM data
+            WHERE {qtime} IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+        """).fetchall()
     return [
         TimeBucket(
             label=str(label),
@@ -658,7 +713,10 @@ def _target_drift(
     target_kind: str | None,
     time_as_float: np.ndarray,
 ) -> tuple[float | None, str | None, float | None]:
-    """Drift across time deciles. Kinds: binary | multiclass | regression_ratio | regression_diff."""
+    """Drift across time deciles.
+
+    Kinds: binary | multiclass | regression_ratio | regression_diff.
+    """
     if y_full is None or target_valid is None or target_kind is None:
         return None, None, None
     mask = target_valid & ~np.isnan(time_as_float)

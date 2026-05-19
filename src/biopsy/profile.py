@@ -470,6 +470,7 @@ def profile(
     )
 
     if target is not None and target not in src.columns:
+        src.con.close()
         raise ValueError(
             f"Target column '{target}' not in dataset. Available: {src.columns}"
         )
@@ -497,6 +498,7 @@ def profile(
 
     target_sigs: list[TargetSignal] = []
     target_summary = None
+    target_src = src
     if target:
         target_src, target_stats = _target_source_and_stats(
             data=data,
@@ -560,7 +562,7 @@ def profile(
 
     findings = rank(findings)
 
-    return Profile(
+    prof = Profile(
         source_name=src.source_name,
         source_path=src.source_path,
         n_rows=src.n_rows,
@@ -577,6 +579,10 @@ def profile(
         findings=findings,
         source_uri=src.source_uri,
     )
+    if target_src.con is not src.con:
+        target_src.con.close()
+    src.con.close()
+    return prof
 
 
 def _validate_options(

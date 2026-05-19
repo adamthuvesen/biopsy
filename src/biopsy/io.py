@@ -68,8 +68,9 @@ def load(
     source_name: display name for in-memory data. File paths ignore this.
     """
     con = duckdb.connect(":memory:")
+    cleanup: Any | None = None
     try:
-        scan, resolved_path, display_name, resolved_uri, pushed_down = _input_scan(
+        scan, resolved_path, display_name, resolved_uri, pushed_down, cleanup = _input_scan(
             con, data, source_name,
             credentials_env=credentials_env,
             where=where,
@@ -128,6 +129,10 @@ def load(
                 f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}"
             )
 
+        if cleanup is not None:
+            cleanup()
+            cleanup = None
+
         # Derive the final schema from raw_dtypes minus excluded columns
         # rather than running a second DESCRIBE pass (which can force DuckDB
         # to re-open the file on the CSV/Parquet path).
@@ -147,6 +152,8 @@ def load(
             source_uri=resolved_uri,
         )
     except BaseException:
+        if cleanup is not None:
+            cleanup()
         con.close()
         raise
 
@@ -159,7 +166,7 @@ def _input_scan(
     credentials_env: str | None = None,
     where: list[str] | None = None,
     sample: int | None = None,
-) -> tuple[str, Path | None, str, str | None, bool]:
+) -> tuple[str, Path | None, str, str | None, bool, Any | None]:
     """Resolve `data` into a (scan_expr, path, display_name, uri, pushed_down)
     tuple.
 
@@ -180,22 +187,22 @@ def _input_scan(
 
         parsed = parse_warehouse_uri(text)
         if parsed is not None:
-            scan_expr, qualified, display, pushed_down = _scan_from_uri(
+            scan_expr, qualified, display, pushed_down, cleanup = _scan_from_uri(
                 con, parsed,
                 credentials_env=credentials_env,
                 where=where,
                 sample=sample,
             )
-            return scan_expr, None, display, qualified, pushed_down
+            return scan_expr, None, display, qualified, pushed_down, cleanup
 
         path = Path(data).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
-        return _scan_expr(path), path, path.name, None, False
+        return _scan_expr(path), path, path.name, None, False, None
 
     if isinstance(data, duckdb.DuckDBPyRelation):
         _materialize_relation(con, data)
-        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False
+        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False, None
 
     try:
         con.register(REGISTERED_INPUT_VIEW, data)
@@ -210,7 +217,7 @@ def _input_scan(
             "DuckDB-registerable table such as a pandas DataFrame, Polars "
             "DataFrame/LazyFrame, Arrow table, or DuckDB relation."
         ) from exc
-    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False
+    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False, None
 
 
 def _scan_from_uri(
@@ -220,7 +227,7 @@ def _scan_from_uri(
     credentials_env: str | None = None,
     where: list[str] | None = None,
     sample: int | None = None,
-) -> tuple[str, str, str, bool]:
+) -> tuple[str, str, str, bool, Any | None]:
     """Dispatch a parsed URI to its scheme adapter.
 
     DuckDB-extension adapters (object-store, Postgres) return a SQL scan
@@ -261,10 +268,22 @@ def _scan_from_uri(
 
     display = _display_for_uri(parsed)
     if result.scan_sql is not None:
-        return result.scan_sql, result.qualified_name, display, result.pushed_down
+        return (
+            result.scan_sql,
+            result.qualified_name,
+            display,
+            result.pushed_down,
+            result.cleanup,
+        )
     if result.arrow_table is not None:
         con.register(REGISTERED_INPUT_VIEW, result.arrow_table)
-        return REGISTERED_INPUT_VIEW, result.qualified_name, display, result.pushed_down
+        return (
+            REGISTERED_INPUT_VIEW,
+            result.qualified_name,
+            display,
+            result.pushed_down,
+            result.cleanup,
+        )
     raise RuntimeError(
         f"Adapter for '{scheme}' returned neither scan_sql nor arrow_table."
     )
