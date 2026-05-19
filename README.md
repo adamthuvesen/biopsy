@@ -153,16 +153,54 @@ Supported inputs:
 - Polars DataFrame or LazyFrame
 - Arrow Table or RecordBatchReader
 - DuckDB relations
+- Object-store URIs: `s3://bucket/key.parquet`, `https://host/file.parquet`, `gs://bucket/key.parquet`
 
 Pandas, Polars, and Arrow are optional dependencies. `biopsy` registers in-memory objects with DuckDB and keeps the core dependency set small.
+
+## Warehouse sources
+
+Biopsy profiles data where it lives — no need to export to Parquet first. Pass a URI anywhere a file path is accepted:
+
+```bash
+biopsy profile s3://my-bucket/events.parquet --target conversion
+biopsy profile https://host/data.csv --sample 20000
+biopsy doctor s3://my-bucket/big.parquet           # reads the Parquet footer; no row data transferred
+```
+
+Read-only / pull-only by construction. Biopsy never writes back to a warehouse — adapters only issue `SELECT`s, enforced by a lint test in CI. The `--sample N` flag becomes `LIMIT N` against warehouse sources (head-of-table, not random); use `--filter` for stratification.
+
+Object-store auth comes from environment variables. Credentials never appear on the command line, in saved profiles, or in progress output:
+
+| Scheme | Required env vars |
+|---|---|
+| `s3://`, `s3a://` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `AWS_REGION` |
+| `gs://`, `gcs://` | `GOOGLE_APPLICATION_CREDENTIALS` (path to service-account JSON) |
+| `https://`, `http://` | none required (public). Optional `BIOPSY_HTTPS_BEARER` for bearer auth (future) |
+
+Use a different credential set with `--credentials-env PREFIX`:
+
+```bash
+# Reads STAGING_AWS_ACCESS_KEY_ID etc. instead of AWS_ACCESS_KEY_ID.
+biopsy profile s3://staging-bucket/events.parquet --credentials-env STAGING
+```
+
+Install backends as needed (none are required for the default install):
+
+```bash
+pip install 'biopsy[object-store]'        # S3, HTTPS, GCS (no extra Python deps; uses DuckDB httpfs)
+pip install 'biopsy[warehouse]'           # everything (also includes snowflake/bigquery/postgres extras)
+```
+
+**Currently shipped:** S3, HTTPS, GCS via DuckDB's `httpfs` extension.
+**Planned (follow-up changes):** Postgres (DuckDB extension), BigQuery, Snowflake.
 
 ## CLI
 
 ```bash
-biopsy profile <file> [options]
-biopsy compare <A> <B> [options]              # data files or saved JSONs
+biopsy profile <file-or-uri> [options]
+biopsy compare <A> <B> [options]              # data files, URIs, or saved JSONs
 biopsy diff <a.json> <b.json>
-biopsy doctor <file>                          # schema + candidate target/time columns
+biopsy doctor <file-or-uri>                   # schema + candidate target/time columns
 biopsy init <file>                            # write a starter biopsy.toml
 biopsy notebook <out.ipynb> --file <data> --target <col>
 biopsy render <profile.json> --html <out.html>
