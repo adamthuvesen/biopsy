@@ -576,38 +576,62 @@ def _doctor_load(
 ) -> tuple[dict[str, ColumnStats], str, int | None, bool]:
     """Resolve doctor's input into (stats, display_name, n_rows, schema_only).
 
-    For warehouse URIs (currently object stores), uses cheap schema-only
-    discovery and returns empty stats decorated only with dtype + kind.
-    For paths and in-memory frames, falls through to `compute_all` on a
-    sampled view (existing behavior).
+    For warehouse URIs, uses cheap schema-only discovery (Parquet footer
+    for object stores; `information_schema` + `pg_class.reltuples` for
+    Postgres). For paths and in-memory frames, falls through to
+    `compute_all` on a sampled view (existing behavior).
     """
     import duckdb
 
-    from biopsy.io import kind_of
     from biopsy.warehouse import parse_warehouse_uri
 
     parsed = parse_warehouse_uri(path)
     if parsed is not None and parsed.scheme in {"s3", "s3a", "https", "http", "gs", "gcs"}:
-        from biopsy.warehouse.object_store import discover_schema
+        from biopsy.warehouse.object_store import discover_schema as object_store_schema
 
         con = duckdb.connect(":memory:")
         try:
-            schema = discover_schema(con, parsed)
+            schema = object_store_schema(con, parsed)
         finally:
             con.close()
-        stats: dict[str, ColumnStats] = {
-            name: ColumnStats(
-                name=name, dtype=dtype, kind=kind_of(dtype),
-                n=0, n_null=0, n_unique=0, null_rate=0.0,
+        return _doctor_stats_from_schema(schema, None, parsed.qualified)
+
+    if parsed is not None and parsed.scheme in {"postgres", "postgresql"}:
+        from biopsy.warehouse.postgres import discover_schema as postgres_schema
+
+        con = duckdb.connect(":memory:")
+        try:
+            schema, row_estimate = postgres_schema(
+                con, parsed, credentials_env=credentials_env,
             )
-            for name, dtype in schema.items()
-        }
-        # Friendly display: last URL segment.
-        display = parsed.qualified.rsplit("/", 1)[-1] or parsed.qualified
-        return stats, display, None, True
+        finally:
+            con.close()
+        return _doctor_stats_from_schema(schema, row_estimate, parsed.qualified)
 
     src = load(path, sample=sample, credentials_env=credentials_env)
     return compute_all(src), src.source_name, src.n_rows, False
+
+
+def _doctor_stats_from_schema(
+    schema: dict[str, str], row_estimate: int | None, qualified: str,
+) -> tuple[dict[str, ColumnStats], str, int | None, bool]:
+    """Convert a schema-only discovery result into the doctor's tuple shape.
+
+    Most ColumnStats fields are unknown (no rows pulled). The fields the
+    doctor actually consults — `name`, `dtype`, `kind` — are populated;
+    everything else defaults to zero.
+    """
+    from biopsy.io import kind_of as _kind_of
+
+    stats: dict[str, ColumnStats] = {
+        name: ColumnStats(
+            name=name, dtype=dtype, kind=_kind_of(dtype),
+            n=0, n_null=0, n_unique=0, null_rate=0.0,
+        )
+        for name, dtype in schema.items()
+    }
+    display = qualified.rsplit("/", 1)[-1] or qualified
+    return stats, display, row_estimate, True
 
 
 @app.command()
