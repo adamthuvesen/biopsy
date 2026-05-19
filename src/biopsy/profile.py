@@ -80,6 +80,10 @@ class Profile:
     temporal: TemporalReport | None = None
     clusters: ClusterReport | None = None
     findings: list[Finding] = field(default_factory=list)
+    # Set for warehouse / object-store sources; mutually exclusive with
+    # source_path. Older saved profiles will not have this field — see
+    # `from_dict` for the back-compat path.
+    source_uri: str | None = None
 
     def findings_records(self) -> list[dict[str, Any]]:
         return [to_jsonable(f) for f in self.findings]
@@ -151,6 +155,7 @@ class Profile:
             temporal=_from_temporal_report(data.get("temporal")),
             clusters=_from_cluster_report(data.get("clusters")),
             findings=[Finding(**payload) for payload in data.get("findings", [])],
+            source_uri=data.get("source_uri"),
         )
 
     def _repr_html_(self) -> str:
@@ -443,6 +448,7 @@ def profile(
     bootstrap: int = 0,
     pps_seeds: int = 1,
     max_cols: int | None = None,
+    credentials_env: str | None = None,
     progress: ProgressCallback | None = None,
 ) -> Profile:
     _validate_options(
@@ -460,6 +466,7 @@ def profile(
         ignore_missing_exclude=ignore_missing_exclude,
         where=where,
         source_name=source_name,
+        credentials_env=credentials_env,
     )
 
     if target is not None and target not in src.columns:
@@ -568,6 +575,7 @@ def profile(
         temporal=temporal_report,
         clusters=clusters_report,
         findings=findings,
+        source_uri=src.source_uri,
     )
 
 
@@ -647,6 +655,12 @@ def _target_source_and_stats(
     source_name: str | None,
 ) -> tuple[Source, dict[str, ColumnStats]]:
     if sample is None or not isinstance(data, str | Path):
+        return src, stats
+    # A warehouse URI is a string but re-loading would re-pull the whole
+    # remote table just to compute target metrics. Treat URIs like
+    # in-memory frames here: target metrics use the sampled source, which
+    # is what the user opted into.
+    if isinstance(data, str) and src.source_uri is not None:
         return src, stats
 
     target_src = load(

@@ -19,6 +19,10 @@ from biopsy.profile import profile as profile_fn
 from biopsy.render.html import render as render_html
 from biopsy.render.terminal import render as render_terminal
 from biopsy.stats import ColumnStats, compute_all
+from biopsy.warehouse import (
+    MissingCredentialError,
+    WarehouseDriverNotInstalledError,
+)
 
 app = typer.Typer(
     name="biopsy",
@@ -28,9 +32,32 @@ app = typer.Typer(
 )
 
 
+# Errors we treat as "user input is wrong" — show a clean one-line message
+# and exit with code 2 rather than dumping a Rich traceback.
+_USER_ERRORS: tuple[type[Exception], ...] = (
+    MissingCredentialError,
+    WarehouseDriverNotInstalledError,
+    FileNotFoundError,
+    ValueError,
+    NotImplementedError,
+)
+
+
+def _clean_exit_on_user_error(exc: Exception) -> None:
+    """Print the message to stderr and exit non-zero — no traceback."""
+    Console(stderr=True).print(f"[red]biopsy:[/red] {exc}")
+    raise typer.Exit(code=2) from None
+
+
 @app.command()
 def profile(
-    path: Path = typer.Argument(..., help="CSV, TSV, Parquet, or JSON file."),
+    path: str = typer.Argument(
+        ...,
+        help=(
+            "Data source: file path (.csv/.tsv/.parquet/.json) or warehouse "
+            "URI (s3://, https://, gs://, postgres://, snowflake://, bigquery://)."
+        ),
+    ),
     config: Path | None = typer.Option(
         None, "--config", help="TOML config with target, filters, exclusions, and output defaults."
     ),
@@ -94,6 +121,13 @@ def profile(
         help="Cap the number of columns in the pairwise MI pass. "
              "Useful on wide datasets to keep runtime sub-linear.",
     ),
+    credentials_env: str | None = typer.Option(
+        None, "--credentials-env",
+        help=(
+            "Prefix for warehouse credential env vars. With 'STAGING', biopsy "
+            "reads STAGING_SNOWFLAKE_USER etc. instead of SNOWFLAKE_USER."
+        ),
+    ),
     open_browser: bool = typer.Option(False, "--open", help="Open the HTML report in a browser."),
 ) -> None:
     """Profile a dataset and print a ranked report."""
@@ -133,20 +167,28 @@ def profile(
     def show_progress(message: str) -> None:
         progress_console.print(f"[dim]biopsy:[/dim] {message}")
 
+    # Warn once when sampling against a warehouse source — LIMIT N is
+    # head-of-storage, not random, and can be biased.
+    _maybe_warn_warehouse_sample(progress_console, path, sample)
+
     progress_cb = show_progress if progress else None
-    prof = profile_fn(
-        path, target=target, time_col=time_col, sample=sample, hist_bins=bins,
-        cluster_cutoff=cluster_cutoff, shortlist_size=shortlist,
-        exclude=exclude_cols or None,
-        ignore_missing_exclude=ignore_missing_exclude,
-        where=where_filters or None,
-        deep_correlations=not fast,
-        target_permutation=not fast,
-        target_sample_size=target_sample,
-        stratify_target=True,
-        max_cols=max_cols,
-        progress=progress_cb,
-    )
+    try:
+        prof = profile_fn(
+            path, target=target, time_col=time_col, sample=sample, hist_bins=bins,
+            cluster_cutoff=cluster_cutoff, shortlist_size=shortlist,
+            exclude=exclude_cols or None,
+            ignore_missing_exclude=ignore_missing_exclude,
+            where=where_filters or None,
+            deep_correlations=not fast,
+            target_permutation=not fast,
+            target_sample_size=target_sample,
+            stratify_target=True,
+            max_cols=max_cols,
+            credentials_env=credentials_env,
+            progress=progress_cb,
+        )
+    except _USER_ERRORS as exc:
+        _clean_exit_on_user_error(exc)
     render_terminal(prof, console=console, all_columns=all_columns)
 
     if save:
@@ -160,8 +202,12 @@ def profile(
         console.print(f"\n[dim]Sklearn pipeline:[/dim] {pipeline_path}")
 
     if html or open_browser:
+        # Derive a clean default filename from the source's display name.
+        # source_name is `Path.name` for files and the last URI segment for
+        # warehouse sources — `.stem` strips a trailing extension if any.
+        stem = Path(prof.source_name).stem or "report"
         out = html if html is not None else (
-            Path(tempfile.gettempdir()) / f"biopsy-{path.stem}.html"
+            Path(tempfile.gettempdir()) / f"biopsy-{stem}.html"
         )
         rendered = render_html(prof, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
@@ -189,8 +235,8 @@ def render_saved_profile(
 
 @app.command()
 def compare(
-    a: Path = typer.Argument(..., help="Side A: data file or profile JSON."),
-    b: Path = typer.Argument(..., help="Side B: data file or profile JSON."),
+    a: str = typer.Argument(..., help="Side A: data file, warehouse URI, or profile JSON."),
+    b: str = typer.Argument(..., help="Side B: data file, warehouse URI, or profile JSON."),
     target: str | None = typer.Option(
         None, "--target", "-t", help="Target column (used when A and B are data files)."
     ),
@@ -223,8 +269,11 @@ def compare(
     def show(side: str, msg: str) -> None:
         progress_console.print(f"[dim]biopsy compare ({side}):[/dim] {msg}")
 
-    prof_a = _load_side(a, "A", target, time_col, where, sample, show if progress else None)
-    prof_b = _load_side(b, "B", target, time_col, where, sample, show if progress else None)
+    try:
+        prof_a = _load_side(a, "A", target, time_col, where, sample, show if progress else None)
+        prof_b = _load_side(b, "B", target, time_col, where, sample, show if progress else None)
+    except _USER_ERRORS as exc:
+        _clean_exit_on_user_error(exc)
     report = compare_profiles(prof_a, prof_b)
     _print_compare(console, report)
 
@@ -247,8 +296,10 @@ def compare(
         console.print(f"\n[dim]Compare JSON:[/dim] {save_path}")
 
     if html or open_browser:
+        a_stem = Path(prof_a.source_name).stem or "a"
+        b_stem = Path(prof_b.source_name).stem or "b"
         out = html if html is not None else (
-            Path(tempfile.gettempdir()) / f"biopsy-compare-{a.stem}-{b.stem}.html"
+            Path(tempfile.gettempdir()) / f"biopsy-compare-{a_stem}-{b_stem}.html"
         )
         rendered = render_compare(prof_a, prof_b, report, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
@@ -400,16 +451,41 @@ def _starter_notebook(
 
 @app.command()
 def doctor(
-    path: Path = typer.Argument(..., help="Data file to inspect."),
+    path: str = typer.Argument(
+        ...,
+        help=(
+            "Data source: file path or warehouse URI "
+            "(s3://, https://, postgres://, snowflake://, bigquery://)."
+        ),
+    ),
     sample: int = typer.Option(5000, "--sample", min=100, help="Rows to scan for inference."),
+    credentials_env: str | None = typer.Option(
+        None, "--credentials-env",
+        help="Prefix for warehouse credential env vars. See `biopsy profile --help`.",
+    ),
 ) -> None:
     """Quick check: schema, candidate targets, candidate time columns.
 
     Doesn't run the full profile — sub-2-seconds on most datasets.
+    Warehouse sources use schema-only discovery and do NOT pull row data.
     """
     console = Console(width=120)
-    src = load(path, sample=sample)
-    stats = compute_all(src)
+    progress_console = Console(stderr=True, width=120)
+
+    # For warehouse URIs, use cheap schema discovery — no row data
+    # transferred. The trade-off: cardinality-based "looks like" hints
+    # need row data, so warehouse doctor skips them and prints a tip.
+    try:
+        stats, display_name, n_rows_estimate, schema_only = _doctor_load(
+            path, sample=sample, credentials_env=credentials_env,
+        )
+    except _USER_ERRORS as exc:
+        _clean_exit_on_user_error(exc)
+    if schema_only:
+        progress_console.print(
+            "[dim]biopsy:[/dim] schema-only mode — no row data transferred. "
+            "Use `biopsy profile --sample N` for cardinality-based hints."
+        )
 
     from rich.panel import Panel
     from rich.table import Table
@@ -441,10 +517,18 @@ def doctor(
             f"{s.n_unique:,}",
             ", ".join(looks),
         )
+    if schema_only:
+        rows_label = (
+            f"~{n_rows_estimate:,} rows (estimate)"
+            if n_rows_estimate is not None
+            else "row count unknown"
+        )
+    else:
+        rows_label = f"{n_rows_estimate:,} rows" if n_rows_estimate is not None else "—"
     console.print(
         Panel(
             head,
-            title=f"[bold]Doctor[/bold] · {path.name} · {src.n_rows:,} rows",
+            title=f"[bold]Doctor[/bold] · {display_name} · {rows_label}",
             border_style="magenta",
             padding=(0, 1),
         )
@@ -460,6 +544,70 @@ def doctor(
     if not summary:
         summary.append("no obvious target/time candidates — pass --target/--time explicitly")
     console.print("[dim]" + " · ".join(summary) + "[/dim]")
+
+
+def _maybe_warn_warehouse_sample(
+    progress_console: Console, path: str, sample: int | None,
+) -> None:
+    """Print a one-shot stderr warning if `--sample` is used against a URI.
+
+    Warehouse sources translate `--sample N` to `LIMIT N`, which is
+    head-of-storage (not random). Comparisons between samples can show
+    false drift from sampling differences alone.
+    """
+    if sample is None or "://" not in path:
+        return
+    from biopsy.warehouse import parse_warehouse_uri
+
+    try:
+        parsed = parse_warehouse_uri(path)
+    except ValueError:
+        return
+    if parsed is None:
+        return
+    progress_console.print(
+        "[yellow]biopsy:[/yellow] sample is head-of-table on warehouse sources "
+        "(not random). Use --filter for stratification."
+    )
+
+
+def _doctor_load(
+    path: str, *, sample: int, credentials_env: str | None,
+) -> tuple[dict[str, ColumnStats], str, int | None, bool]:
+    """Resolve doctor's input into (stats, display_name, n_rows, schema_only).
+
+    For warehouse URIs (currently object stores), uses cheap schema-only
+    discovery and returns empty stats decorated only with dtype + kind.
+    For paths and in-memory frames, falls through to `compute_all` on a
+    sampled view (existing behavior).
+    """
+    import duckdb
+
+    from biopsy.io import kind_of
+    from biopsy.warehouse import parse_warehouse_uri
+
+    parsed = parse_warehouse_uri(path)
+    if parsed is not None and parsed.scheme in {"s3", "s3a", "https", "http", "gs", "gcs"}:
+        from biopsy.warehouse.object_store import discover_schema
+
+        con = duckdb.connect(":memory:")
+        try:
+            schema = discover_schema(con, parsed)
+        finally:
+            con.close()
+        stats: dict[str, ColumnStats] = {
+            name: ColumnStats(
+                name=name, dtype=dtype, kind=kind_of(dtype),
+                n=0, n_null=0, n_unique=0, null_rate=0.0,
+            )
+            for name, dtype in schema.items()
+        }
+        # Friendly display: last URL segment.
+        display = parsed.qualified.rsplit("/", 1)[-1] or parsed.qualified
+        return stats, display, None, True
+
+    src = load(path, sample=sample, credentials_env=credentials_env)
+    return compute_all(src), src.source_name, src.n_rows, False
 
 
 @app.command()
@@ -548,7 +696,7 @@ def init_config(
 
 
 def _load_side(
-    path: Path,
+    path: str,
     label: str,
     target: str | None,
     time_col: str | None,
@@ -556,20 +704,33 @@ def _load_side(
     sample: int | None,
     show: Any,
 ) -> Any:
-    """Either load a saved profile JSON or profile a data file in place."""
-    if path.suffix.lower() == ".json":
+    """Either load a saved profile JSON or profile a data file / URI in place.
+
+    Accepts file paths, warehouse URIs, and saved profile JSONs. JSON
+    detection is by suffix; URIs and paths flow through to `profile_fn`,
+    which handles dispatch.
+    """
+    text = str(path)
+    is_uri = "://" in text
+    # Saved profiles are local files with .json suffix. Don't treat a
+    # warehouse URI ending in .json (e.g. s3://bucket/x.json) as a saved
+    # profile.
+    if not is_uri and text.lower().endswith(".json"):
+        display = Path(text).name
         if show:
-            show(label, f"loading profile {path.name}")
-        return load_profile(path)
+            show(label, f"loading profile {display}")
+        return load_profile(Path(text))
+
+    display = text if is_uri else Path(text).name
     if show:
-        show(label, f"profiling {path.name}")
+        show(label, f"profiling {display}")
 
     def cb(message: str) -> None:
         if show:
             show(label, message)
 
     return profile_fn(
-        path,
+        text,
         target=target,
         time_col=time_col,
         where=where or None,

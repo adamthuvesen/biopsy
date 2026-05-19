@@ -14,7 +14,12 @@ REGISTERED_INPUT_VIEW = "__biopsy_input__"
 
 @dataclass(frozen=True)
 class Source:
-    """A loaded dataset, exposed as a DuckDB view named `data`."""
+    """A loaded dataset, exposed as a DuckDB view named `data`.
+
+    `source_path` is set for file-system inputs; `source_uri` is set for
+    warehouse / object-store inputs (e.g. `s3://bucket/key.parquet`). At
+    most one is set; in-memory dataframe inputs leave both as None.
+    """
 
     con: duckdb.DuckDBPyConnection
     source_name: str
@@ -23,6 +28,7 @@ class Source:
     n_cols: int
     columns: list[str]
     dtypes: dict[str, str]
+    source_uri: str | None = None
 
     def sql(self, query: str) -> duckdb.DuckDBPyRelation:
         return self.con.sql(query)
@@ -48,6 +54,7 @@ def load(
     ignore_missing_exclude: bool = False,
     where: list[str] | None = None,
     source_name: str | None = None,
+    credentials_env: str | None = None,
 ) -> Source:
     """Open a file or in-memory table as a DuckDB view named `data`.
 
@@ -62,7 +69,9 @@ def load(
     """
     con = duckdb.connect(":memory:")
     try:
-        scan, resolved_path, display_name = _input_scan(con, data, source_name)
+        scan, resolved_path, display_name, resolved_uri = _input_scan(
+            con, data, source_name, credentials_env=credentials_env,
+        )
 
         # First materialize the raw scan so we know the schema for filter parsing
         # and exclusion validation.
@@ -128,6 +137,7 @@ def load(
             n_cols=len(columns),
             columns=columns,
             dtypes=dtypes,
+            source_uri=resolved_uri,
         )
     except BaseException:
         con.close()
@@ -138,16 +148,36 @@ def _input_scan(
     con: duckdb.DuckDBPyConnection,
     data: str | Path | Any,
     source_name: str | None,
-) -> tuple[str, Path | None, str]:
+    *,
+    credentials_env: str | None = None,
+) -> tuple[str, Path | None, str, str | None]:
+    """Resolve `data` into a (scan_expr, path, display_name, uri) tuple.
+
+    Dispatches in order: URI scheme → file path → DuckDB relation →
+    DuckDB-registerable object. Only one branch ever returns a non-None
+    `path` OR `uri` — they're mutually exclusive.
+    """
     if isinstance(data, str | Path):
+        text = str(data)
+        # URI takes precedence over path: a string like
+        # "s3://bucket/x.parquet" should not be treated as a relative path.
+        from biopsy.warehouse._base import parse_warehouse_uri
+
+        parsed = parse_warehouse_uri(text)
+        if parsed is not None:
+            scan_expr, qualified, display = _scan_from_uri(
+                con, parsed, credentials_env=credentials_env,
+            )
+            return scan_expr, None, display, qualified
+
         path = Path(data).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
-        return _scan_expr(path), path, path.name
+        return _scan_expr(path), path, path.name, None
 
     if isinstance(data, duckdb.DuckDBPyRelation):
         _materialize_relation(con, data)
-        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe"
+        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None
 
     try:
         con.register(REGISTERED_INPUT_VIEW, data)
@@ -162,7 +192,53 @@ def _input_scan(
             "DuckDB-registerable table such as a pandas DataFrame, Polars "
             "DataFrame/LazyFrame, Arrow table, or DuckDB relation."
         ) from exc
-    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe"
+    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None
+
+
+def _scan_from_uri(
+    con: duckdb.DuckDBPyConnection,
+    parsed: Any,
+    *,
+    credentials_env: str | None = None,
+) -> tuple[str, str, str]:
+    """Dispatch a parsed URI to its scheme adapter.
+
+    Object stores (s3/https/gs) and Postgres use DuckDB extensions and
+    return a SQL scan expression usable directly in FROM. Snowflake /
+    BigQuery (when falling back to the Python client) return an Arrow
+    table; we register it as the standard input view.
+    """
+    scheme = parsed.scheme
+    if scheme in {"s3", "s3a", "https", "http", "gs", "gcs"}:
+        from biopsy.warehouse.object_store import open_object_store
+
+        result = open_object_store(con, parsed, credentials_env=credentials_env)
+    else:
+        # Postgres / BigQuery / Snowflake adapters land here in later
+        # changes. For now, refuse with a clear message — the URI parser
+        # already accepted the scheme, so the user has installed biopsy
+        # but expected an adapter that isn't yet implemented.
+        raise NotImplementedError(
+            f"Adapter for scheme '{scheme}' is not yet implemented. "
+            "Tracking issue: warehouse-connector change, follow-up sections."
+        )
+
+    if result.scan_sql is not None:
+        return result.scan_sql, result.qualified_name, _display_for_uri(parsed)
+    if result.arrow_table is not None:
+        con.register(REGISTERED_INPUT_VIEW, result.arrow_table)
+        return REGISTERED_INPUT_VIEW, result.qualified_name, _display_for_uri(parsed)
+    raise RuntimeError(
+        f"Adapter for '{scheme}' returned neither scan_sql nor arrow_table."
+    )
+
+
+def _display_for_uri(parsed: Any) -> str:
+    """Friendly short name for an URI — last path segment, or host."""
+    path = parsed.path.rstrip("/")
+    if path:
+        return path.rsplit("/", 1)[-1]
+    return parsed.host or parsed.qualified
 
 
 def _materialize_relation(
