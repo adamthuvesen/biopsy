@@ -811,9 +811,9 @@
   {# ============================================================ Sidebar #}
   <nav class="side">
     <div class="group">Report</div>
-    <a href="#verdict">The verdict</a>
-    <a href="#action">Action plan</a>
-    <a href="#findings">Findings <span class="count">{{ prof.findings|length }}</span></a>
+    {% if verdict_cards %}<a href="#verdict">The verdict</a>{% endif %}
+    {% if action_plan.drop or action_plan.review or action_plan.transform %}<a href="#action">Action plan</a>{% endif %}
+    {% if prof.findings %}<a href="#findings">Findings <span class="count">{{ prof.findings|length }}</span></a>{% endif %}
 
     <div class="group">Deep dive</div>
     {% if target_chart or target_prevalence_chart %}<a href="#target">Target signal</a>{% endif %}

@@ -25,5 +25,8 @@ def to_jsonable(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return to_jsonable(value.tolist())
     if isinstance(value, float):
+        # NaN and ±Inf both collapse to None — JSON has no native non-finite
+        # encoding. Round-tripped profiles cannot distinguish "all-null mean"
+        # from "overflow", so callers shouldn't rely on Inf surviving save/load.
         return value if math.isfinite(value) else None
     return value

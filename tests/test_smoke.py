@@ -1318,8 +1318,10 @@ def test_action_plan_basic(tmp_path: Path) -> None:
     records = plan.records()
     assert records
     assert {"bucket", "column", "action", "reason", "severity", "evidence"} <= records[0].keys()
-    # action_plan() is cached — second call returns the same object.
-    assert prof.action_plan() is plan
+    # action_plan() is idempotent — repeated calls return equivalent plans.
+    # (No identity guarantee — caching across mutations introduced staleness.)
+    again = prof.action_plan()
+    assert again.records() == plan.records()
 
 
 def test_html_render(tmp_path: Path) -> None:

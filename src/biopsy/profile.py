@@ -33,6 +33,7 @@ from biopsy.temporal import (
     TemporalReport,
     TemporalSignal,
     TimeBucket,
+    _target_kind,
     resolve_time_column,
     temporal_signals,
 )
@@ -95,23 +96,10 @@ class Profile:
         return [to_jsonable(s) for s in self.clusters.shortlist]
 
     def action_plan(self) -> Any:
-        """Synthesized modeling action plan: drop / impute / encode /
-        transform / review buckets plus split + CV + class strategy.
-
-        Built from findings, columns, target summary, and temporal report.
-        Cached on the instance.
-        """
-        cached = getattr(self, "_action_plan_cache", None)
-        if cached is not None:
-            return cached
+        """Synthesized modeling action plan (drop / impute / encode / transform / review)."""
         from biopsy.action_plan import build_action_plan
 
-        plan = build_action_plan(self)
-        object.__setattr__(self, "_action_plan_cache", plan)
-        return plan
-
-    def action_plan_records(self) -> list[dict[str, Any]]:
-        return self.action_plan().records()
+        return build_action_plan(self)
 
     def to_sklearn_pipeline_code(self) -> str:
         """Return a runnable Python module that builds a ColumnTransformer
@@ -151,7 +139,7 @@ class Profile:
             time_column=data.get("time_column"),
             target_summary=_from_target_summary(data.get("target_summary")),
             columns={
-                name: ColumnStats(**payload)
+                name: _column_stats_from_payload(payload)
                 for name, payload in data.get("columns", {}).items()
             },
             correlations=[
@@ -208,7 +196,16 @@ class Profile:
         return features if limit is None else features[:limit]
 
     def leakage_suspects(self) -> list[str]:
-        return [s.feature for s in self.target_signals if s.is_leak_suspect]
+        signal_leaks = [s.feature for s in self.target_signals if s.is_leak_suspect]
+        skip = {self.target, self.time_column}
+        finding_leaks = [
+            c
+            for f in self.findings
+            if f.category == "leakage" and f.severity == "critical"
+            for c in f.columns
+            if c not in skip
+        ]
+        return _unique(signal_leaks + finding_leaks)
 
     def drop_candidates(self, include_leakage: bool = True) -> list[str]:
         candidates: list[str] = []
@@ -362,11 +359,15 @@ def diff_profiles(a: Profile, b: Profile) -> ProfileDiff:
 def _finding_key(f: Finding) -> tuple[str, str]:
     """Stable key for matching findings across profiles.
 
-    Uses category + first column + the part of the title before a
-    parenthetical (e.g., the percent in `has 30% nulls`).
+    Keys on `kind` when present (newly-emitted findings) so a percent change
+    in the title (e.g. "30% nulls" → "50% nulls") doesn't split one trend into
+    appeared/resolved. Falls back to the title-prefix scheme for older
+    round-tripped JSON profiles.
     """
-    base = f.title.split("(")[0].rstrip()
     col = f.columns[0] if f.columns else ""
+    if f.kind:
+        return (f.category, f"{col}|kind:{f.kind}")
+    base = f.title.split("(")[0].rstrip()
     return (f.category, f"{col}|{base}")
 
 
@@ -378,7 +379,18 @@ def load_profile(path: str | Path) -> Profile:
 def _from_target_summary(data: dict[str, Any] | None) -> TargetSummary | None:
     if data is None:
         return None
-    return TargetSummary(**data)
+    payload = dict(data)
+    payload["class_counts"] = [tuple(x) for x in payload.get("class_counts", [])]
+    return TargetSummary(**payload)
+
+
+def _column_stats_from_payload(payload: dict[str, Any]) -> ColumnStats:
+    """Coerce JSON-round-tripped lists back into the tuple shapes declared on ColumnStats."""
+    p = dict(payload)
+    p["top_values"] = [tuple(x) for x in p.get("top_values", [])]
+    p["histogram"] = [tuple(x) for x in p.get("histogram", [])]
+    p["temporal_buckets"] = [tuple(x) for x in p.get("temporal_buckets", [])]
+    return ColumnStats(**p)
 
 
 def _from_temporal_report(data: dict[str, Any] | None) -> TemporalReport | None:
@@ -464,10 +476,7 @@ def profile(
     priority_features: list[str] | None = None
     if max_cols is not None and target is not None and deep_correlations:
         _progress(progress, "Pre-ranking columns for pairwise pass")
-        # Just use the order from stats — target_signal hasn't been computed
-        # yet, but column iteration order is dataset order which is fine when
-        # the user wants a hard cap. The pairwise pass uses this list.
-        priority_features = [n for n in stats if n != target]
+        priority_features = _univariate_priority(src, stats, target)
 
     _progress(progress, "Computing correlations")
     corrs = correlation_pairs(
@@ -583,6 +592,48 @@ def _progress(callback: ProgressCallback | None, message: str) -> None:
         callback(message)
 
 
+def _univariate_priority(
+    src: Source, stats: dict[str, ColumnStats], target: str,
+) -> list[str]:
+    """Rank candidate features cheaply for the pairwise-MI cap.
+
+    Numeric × numeric pairs use DuckDB's corr() in a single SQL pass; everything
+    else falls back to non-null unique count as a coarse "informativeness"
+    proxy. Returns column names ordered best → worst.
+    """
+    target_stats = stats.get(target)
+    if target_stats is None:
+        return [n for n in stats if n != target]
+    eligible = [
+        n for n, s in stats.items()
+        if n != target and not s.is_constant
+    ]
+    if not eligible:
+        return []
+    target_numeric = target_stats.kind == "numeric"
+    numeric_eligible = [n for n in eligible if stats[n].kind == "numeric"]
+    abs_corr: dict[str, float] = {}
+    if target_numeric and numeric_eligible:
+        qtarget = _quote(target)
+        select = ", ".join(
+            f"abs(corr({_quote(n)}, {qtarget}))" for n in numeric_eligible
+        )
+        row = src.con.execute(f"SELECT {select} FROM data").fetchone()
+        for name, value in zip(numeric_eligible, row, strict=True):
+            if value is not None:
+                abs_corr[name] = float(value)
+
+    def score(name: str) -> tuple[float, int]:
+        if name in abs_corr:
+            return (abs_corr[name], stats[name].n_unique)
+        s = stats[name]
+        nonnull = max(s.n - s.n_null, 1)
+        # Coarse informativeness fallback for non-numeric and unrankable columns.
+        return (0.0, s.n_unique if s.n_unique < nonnull else 0)
+
+    return sorted(eligible, key=score, reverse=True)
+
+
 def _target_source_and_stats(
     data: str | Path | Any,
     src: Source,
@@ -612,12 +663,7 @@ def _target_source_and_stats(
 
 
 def _target_summary(src: Source, target_stats: ColumnStats) -> TargetSummary:
-    kind = (
-        "classification" if (
-            target_stats.kind in {"text", "bool"} or
-            (target_stats.kind == "numeric" and target_stats.n_unique <= 20)
-        ) else "regression"
-    )
+    kind = _target_kind(target_stats)
     class_counts: list[tuple[str, int]] = []
     positive_value = None
     positive_count = None

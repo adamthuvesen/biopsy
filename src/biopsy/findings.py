@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import re as _re
+import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from biopsy.correlations import CorrelationPair, TargetSignal
 from biopsy.stats import ColumnStats
-from biopsy.temporal import TemporalReport, is_target_drifted
+from biopsy.temporal import TemporalReport, TemporalSignal, is_target_drifted
 
 
 @dataclass
@@ -19,6 +20,10 @@ class Finding:
     detail: str
     columns: list[str]
     score: float  # for sorting within severity
+    # Optional structured tag — load-bearing for action_plan dispatch and
+    # cross-profile diff keying. Newly-emitted findings should set it; older
+    # round-tripped JSON profiles will leave it empty.
+    kind: str = ""
 
     @property
     def rank(self) -> int:
@@ -71,8 +76,8 @@ _NULL_SENTINELS: frozenset[str] = frozenset({"?", "NA", "N/A", "n/a", "nan", "Na
 # because DuckDB only keeps the column as VARCHAR when something prevents
 # auto-cast — that "something" is usually a suffix.
 _DATE_PATTERNS = [
-    _re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?"),
-    _re.compile(r"^\d{4}/\d{2}/\d{2}"),
+    re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?"),
+    re.compile(r"^\d{4}/\d{2}/\d{2}"),
 ]
 
 
@@ -139,7 +144,7 @@ def column_findings(
         # n_unique=0 and would otherwise be miscategorized as "constant".
         if s.null_rate >= 1.0:
             out.append(Finding(
-                severity="critical", category="quality",
+                severity="critical", category="quality", kind="all_null",
                 title=f"`{s.name}` is 100% null",
                 detail=f"All {s.n:,} rows are missing — column is empty.",
                 columns=[s.name], score=1.0,
@@ -149,7 +154,7 @@ def column_findings(
         # constants (after the all-null check above)
         if s.is_constant and not is_target:
             out.append(Finding(
-                severity="warning", category="suspicious",
+                severity="warning", category="suspicious", kind="constant",
                 title=f"`{s.name}` is constant",
                 detail=(
                     f"Only {s.n_unique} unique value(s) across {n_rows:,} rows — "
@@ -164,7 +169,7 @@ def column_findings(
             top_val, top_count = s.top_values[0]
             pct = top_count / max(s.n - s.n_null, 1)
             out.append(Finding(
-                severity="warning", category="suspicious",
+                severity="warning", category="suspicious", kind="near_constant",
                 title=f"`{s.name}` is near-constant ({pct:.1%})",
                 detail=(
                     f"Value '{top_val}' dominates {top_count:,} of "
@@ -177,14 +182,14 @@ def column_findings(
         if s.null_rate > 0.5:
             sev = "critical" if s.null_rate > 0.9 else "warning"
             out.append(Finding(
-                severity=sev, category="quality",
+                severity=sev, category="quality", kind="high_nulls",
                 title=f"`{s.name}` is {s.null_rate:.0%} null",
                 detail=f"{s.n_null:,} of {s.n:,} rows are missing.",
                 columns=[s.name], score=s.null_rate,
             ))
         elif s.null_rate > 0.1:
             out.append(Finding(
-                severity="info", category="quality",
+                severity="info", category="quality", kind="some_nulls",
                 title=f"`{s.name}` has {s.null_rate:.0%} nulls",
                 detail=f"{s.n_null:,} missing values.",
                 columns=[s.name], score=s.null_rate,
@@ -193,7 +198,7 @@ def column_findings(
         # ID-shaped feature (high cardinality + ID-ish name)
         if s.n_unique == s.n - s.n_null and s.n_unique > 50 and _looks_like_id(s.name):
             out.append(Finding(
-                severity="warning", category="suspicious",
+                severity="warning", category="suspicious", kind="identifier_shape",
                 title=f"`{s.name}` looks like an identifier",
                 detail=(
                     f"All {s.n_unique:,} non-null values are unique — "
@@ -205,7 +210,7 @@ def column_findings(
         # extreme skew
         if s.skew is not None and abs(s.skew) > 3 and not is_target:
             out.append(Finding(
-                severity="info", category="distribution",
+                severity="info", category="distribution", kind="heavy_skew",
                 title=f"`{s.name}` is heavily skewed (skew={s.skew:.1f})",
                 detail="Consider log/Box-Cox transform before modeling.",
                 columns=[s.name], score=min(abs(s.skew) / 10, 1.0),
@@ -216,7 +221,7 @@ def column_findings(
             rate = s.n_outliers_iqr / max(s.n - s.n_null, 1)
             if rate > 0.01:
                 out.append(Finding(
-                    severity="info", category="distribution",
+                    severity="info", category="distribution", kind="outliers",
                     title=f"`{s.name}` has {s.n_outliers_iqr:,} IQR outliers ({rate:.1%})",
                     detail=(
                         "Values outside [Q1 − 1.5·IQR, Q3 + 1.5·IQR]. "
@@ -233,7 +238,7 @@ def column_findings(
                 is_dominant = str(top_val) in _NULL_SENTINELS
                 sev = "warning" if is_dominant else "info"
                 out.append(Finding(
-                    severity=sev, category="quality",
+                    severity=sev, category="quality", kind="encoded_nulls",
                     title=f"`{s.name}` contains encoded nulls ('{sentinel}')",
                     detail=(
                         f"'{sentinel}' appears as a value — a common null sentinel. "
@@ -245,7 +250,7 @@ def column_findings(
         # high-cardinality text (modeling foot-gun)
         if s.kind == "text" and s.n_unique > 0.5 * (s.n - s.n_null) and s.n_unique > 50:
             out.append(Finding(
-                severity="info", category="suspicious",
+                severity="info", category="suspicious", kind="high_cardinality_text",
                 title=f"`{s.name}` has very high cardinality ({s.n_unique:,} unique)",
                 detail="Free-text or near-unique — needs encoding or feature engineering.",
                 columns=[s.name], score=0.7,
@@ -262,7 +267,7 @@ def column_findings(
             and not is_target
         ):
             out.append(Finding(
-                severity="info", category="suspicious",
+                severity="info", category="suspicious", kind="free_text",
                 title=f"`{s.name}` looks like free text (avg_len={s.avg_len:.0f})",
                 detail=(
                     "Long, near-unique strings — drop, hash, or tokenize. Naive "
@@ -279,7 +284,7 @@ def column_findings(
             and _looks_like_date_string(s.top_values)
         ):
             out.append(Finding(
-                severity="warning", category="quality",
+                severity="warning", category="quality", kind="date_as_string",
                 title=f"`{s.name}` is a date stored as a string",
                 detail=(
                     "Top values match an ISO-8601-ish date pattern. Cast to "
@@ -297,7 +302,7 @@ def column_findings(
             and _values_are_bool_like(s)
         ):
             out.append(Finding(
-                severity="info", category="quality",
+                severity="info", category="quality", kind="bool_as_int",
                 title=f"`{s.name}` is a boolean stored as int",
                 detail=(
                     "Only 0/1 values appear. Treat as a flag — no scaling, "
@@ -316,7 +321,7 @@ def column_findings(
             and s.n_unique > 30
         ):
             out.append(Finding(
-                severity="warning", category="quality",
+                severity="warning", category="quality", kind="high_cardinality_cat",
                 title=f"`{s.name}` is high-cardinality — target encoding leakage risk",
                 detail=(
                     f"{s.n_unique:,} unique levels over {nonnull:,} non-null rows. "
@@ -331,12 +336,27 @@ def column_findings(
 def target_summary_findings(summary: Any) -> list[Finding]:
     out: list[Finding] = []
     if summary.kind == "classification":
+        if summary.n_unique <= 1:
+            out.append(Finding(
+                severity="critical",
+                category="target",
+                kind="target_single_class",
+                title=f"`{summary.name}` has only one class",
+                detail=(
+                    f"All labeled rows share value `{summary.positive_value or 'unknown'}` — "
+                    "the target is unmodelable as classification."
+                ),
+                columns=[summary.name],
+                score=1.0,
+            ))
+            return out
         if summary.n_unique == 2 and summary.positive_count is not None:
             rate = summary.positive_rate or 0.0
             sev = "warning" if summary.positive_count < 100 or rate < 0.01 else "info"
             out.append(Finding(
                 severity=sev,
                 category="target",
+                kind="target_imbalance",
                 title=f"`{summary.name}` is an imbalanced binary target ({rate:.2%} positive)",
                 detail=(
                     f"Positive class `{summary.positive_value}` appears "
@@ -350,6 +370,7 @@ def target_summary_findings(summary: Any) -> list[Finding]:
             out.append(Finding(
                 severity="warning",
                 category="target",
+                kind="target_low_support",
                 title=f"`{summary.name}` has classes with very low support",
                 detail=(
                     f"Smallest class has {summary.min_class_count:,} rows. "
@@ -362,6 +383,7 @@ def target_summary_findings(summary: Any) -> list[Finding]:
         out.append(Finding(
             severity="warning" if summary.n_null / max(summary.n, 1) > 0.1 else "info",
             category="target",
+            kind="target_missing_labels",
             title=f"`{summary.name}` has missing target labels",
             detail=f"{summary.n_null:,} of {summary.n:,} rows have no target.",
             columns=[summary.name],
@@ -378,14 +400,14 @@ def correlation_findings(pairs: list[CorrelationPair]) -> list[Finding]:
         # very high redundancy
         if p.pearson is not None and abs(p.pearson) > 0.95:
             out.append(Finding(
-                severity="warning", category="correlation",
+                severity="warning", category="correlation", kind="multicollinearity",
                 title=f"`{p.a}` and `{p.b}` are nearly identical (r={p.pearson:+.3f})",
                 detail="Strong multicollinearity — one likely derives from the other.",
                 columns=[p.a, p.b], score=abs(p.pearson),
             ))
         elif p.is_nonlinear:
             out.append(Finding(
-                severity="info", category="correlation",
+                severity="info", category="correlation", kind="nonlinear_association",
                 title=(
                     f"`{p.a}` ↔ `{p.b}` is non-linear "
                     f"(MI={p.mutual_info:.2f}, r={p.pearson:+.2f})"
@@ -396,7 +418,7 @@ def correlation_findings(pairs: list[CorrelationPair]) -> list[Finding]:
         elif p.score >= 0.8:
             r = f"r={p.pearson:+.2f}" if p.pearson is not None else f"MI={p.mutual_info:.2f}"
             out.append(Finding(
-                severity="info", category="correlation",
+                severity="info", category="correlation", kind="strong_association",
                 title=f"`{p.a}` ↔ `{p.b}` strongly associated ({r})",
                 detail="",
                 columns=[p.a, p.b], score=p.score,
@@ -409,7 +431,7 @@ def target_findings(signals: list[TargetSignal], target: str) -> list[Finding]:
     for s in signals[:10]:
         if s.is_leak_suspect:
             out.append(Finding(
-                severity="critical", category="leakage",
+                severity="critical", category="leakage", kind="target_pps_leak",
                 title=f"`{s.feature}` may leak the target (score={s.score:.2f})",
                 detail=(
                     f"Predictive score against `{target}` is suspiciously high. "
@@ -419,14 +441,14 @@ def target_findings(signals: list[TargetSignal], target: str) -> list[Finding]:
             ))
         elif s.score >= 0.3:
             out.append(Finding(
-                severity="info", category="target",
+                severity="info", category="target", kind="target_signal",
                 title=f"`{s.feature}` → `{target}` (score={s.score:.2f})",
                 detail="Notable predictive signal.",
                 columns=[s.feature, target], score=s.score,
             ))
         if s.pps_stability is not None and s.pps_stability > 0.30 and s.score >= 0.05:
             out.append(Finding(
-                severity="info", category="target",
+                severity="info", category="target", kind="pps_unstable",
                 title=f"`{s.feature}` PPS is unstable (CoV={s.pps_stability:.2f})",
                 detail=(
                     "Multi-seed PPS varies a lot for this feature — the ranking "
@@ -446,6 +468,7 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
         out.append(Finding(
             severity="info",
             category="temporal",
+            kind="temporal_skipped",
             title="Temporal analysis skipped",
             detail=report.insufficient,
             columns=[report.time_column],
@@ -460,9 +483,11 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
         # collapses. Reason string from `_classify()` carries that signature.
         is_post_event = sig.severity == "critical" and "future information" in (sig.reason or "")
         category = "leakage" if is_post_event else "temporal"
+        kind = "temporal_leak" if is_post_event else _temporal_kind(sig)
         out.append(Finding(
             severity=sig.severity,
             category=category,
+            kind=kind,
             title=_temporal_title(sig),
             detail=sig.reason,
             columns=[sig.feature, report.time_column] + ([target] if target else []),
@@ -495,19 +520,29 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
                 f"Target mean range across deciles is {report.target_drift:.3g} "
                 f"{scale_note}. Models trained on one period may not generalize."
             )
+        raw_score = (
+            report.target_drift_score
+            if report.target_drift_score is not None
+            else report.target_drift
+        )
+        if raw_score is None or not math.isfinite(raw_score):
+            score = 0.0
+        else:
+            score = min(float(raw_score), 1.0)
         out.append(Finding(
             severity="info",
             category="temporal",
+            kind="target_temporal_drift",
             title=f"`{target}` distribution drifts over `{report.time_column}`",
             detail=detail,
             columns=[target, report.time_column],
-            score=min(report.target_drift_score or report.target_drift or 0.0, 1.0),
+            score=score,
         ))
 
     return out
 
 
-def _temporal_title(sig) -> str:  # TemporalSignal
+def _temporal_title(sig: TemporalSignal) -> str:
     if sig.severity == "critical":
         return f"`{sig.feature}` may leak future information"
     if sig.time_monotonicity is not None and sig.time_monotonicity >= 0.95:
@@ -515,6 +550,14 @@ def _temporal_title(sig) -> str:  # TemporalSignal
     if sig.drift_ks is not None and sig.drift_ks >= 0.3:
         return f"`{sig.feature}` distribution drifts over time"
     return f"`{sig.feature}` has temporal anomaly"
+
+
+def _temporal_kind(sig: TemporalSignal) -> str:
+    if sig.time_monotonicity is not None and sig.time_monotonicity >= 0.95:
+        return "time_monotonic"
+    if sig.drift_ks is not None and sig.drift_ks >= 0.3:
+        return "feature_drift"
+    return "temporal_anomaly"
 
 
 def rank(findings: list[Finding]) -> list[Finding]:

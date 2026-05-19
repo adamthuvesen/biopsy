@@ -160,7 +160,9 @@ def profile(
         console.print(f"\n[dim]Sklearn pipeline:[/dim] {pipeline_path}")
 
     if html or open_browser:
-        out = html or Path(tempfile.gettempdir()) / f"biopsy-{path.stem}.html"
+        out = html if html is not None else (
+            Path(tempfile.gettempdir()) / f"biopsy-{path.stem}.html"
+        )
         rendered = render_html(prof, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
         if open_browser:
@@ -245,7 +247,9 @@ def compare(
         console.print(f"\n[dim]Compare JSON:[/dim] {save_path}")
 
     if html or open_browser:
-        out = html or Path(tempfile.gettempdir()) / f"biopsy-compare-{a.stem}-{b.stem}.html"
+        out = html if html is not None else (
+            Path(tempfile.gettempdir()) / f"biopsy-compare-{a.stem}-{b.stem}.html"
+        )
         rendered = render_compare(prof_a, prof_b, report, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
         if open_browser:
@@ -340,7 +344,16 @@ def _starter_notebook(
             f"DATA = {str(data_file)!r}\n"
             f"TARGET = {target_repr}\n"
             f"SHORTLIST = {shortlist_repr}\n"
-            f"df = pd.read_csv(DATA) if DATA.endswith('.csv') else pd.read_parquet(DATA)\n"
+            "if DATA.endswith(('.csv',)):\n"
+            "    df = pd.read_csv(DATA)\n"
+            "elif DATA.endswith(('.tsv', '.txt')):\n"
+            "    df = pd.read_csv(DATA, sep='\\t')\n"
+            "elif DATA.endswith(('.json',)):\n"
+            "    df = pd.read_json(DATA)\n"
+            "elif DATA.endswith(('.jsonl', '.ndjson')):\n"
+            "    df = pd.read_json(DATA, lines=True)\n"
+            "else:\n"
+            "    df = pd.read_parquet(DATA)\n"
             "df.head()\n"
         ),
         md_cell("## Preprocessor (from biopsy action plan)"),
@@ -359,6 +372,8 @@ def _starter_notebook(
         ),
         md_cell("## Baseline model on the shortlist"),
         code_cell(
+            "# `build_preprocessor` is defined by the cell above (biopsy codegen).\n"
+            "assert 'build_preprocessor' in dir(), \"Pipeline cell did not define build_preprocessor()\"\n"
             "preproc = build_preprocessor()\n"
             "pipe = Pipeline([\n"
             "    ('preprocess', preproc),\n"
@@ -429,8 +444,7 @@ def doctor(
     console.print(
         Panel(
             head,
-            title=f"[bold]Doctor[/bold] · {path.name} · "
-                  f"{src.con.execute('SELECT COUNT(*) FROM data').fetchone()[0]:,} rows",
+            title=f"[bold]Doctor[/bold] · {path.name} · {src.n_rows:,} rows",
             border_style="magenta",
             padding=(0, 1),
         )
@@ -463,7 +477,7 @@ def diff(
 
 @app.command()
 def demo(
-    n: int = typer.Option(5000, "--rows", help="Number of rows in synthetic dataset."),
+    n: int = typer.Option(5000, "--rows", min=1, help="Number of rows in synthetic dataset."),
     html: bool = typer.Option(True, "--html/--no-html", help="Generate HTML supplement."),
     open_browser: bool = typer.Option(False, "--open", help="Open the HTML report."),
 ) -> None:
@@ -716,7 +730,15 @@ _CONFIG_KNOWN_KEYS: frozenset[str] = frozenset({
 def _load_cli_config(path: Path | None, profile_name: str | None) -> dict[str, Any]:
     if path is None:
         return {}
-    data = tomllib.loads(path.expanduser().read_text())
+    expanded = path.expanduser()
+    try:
+        text = expanded.read_text()
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read config {expanded}: {exc}") from exc
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise typer.BadParameter(f"Malformed TOML in {expanded}: {exc}") from exc
     profiles = data.get("profiles", {})
     cfg = {k: v for k, v in data.items() if k != "profiles"}
     _check_config_keys(cfg, path, where="top-level")
@@ -773,8 +795,13 @@ def _path_or_none(value: Any) -> Path | None:
 def _read_exclude_file(path: Path | None) -> list[str]:
     if path is None:
         return []
+    expanded = path.expanduser()
+    try:
+        text = expanded.read_text()
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read exclude file {expanded}: {exc}") from exc
     out: list[str] = []
-    for line in path.expanduser().read_text().splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             out.append(stripped)

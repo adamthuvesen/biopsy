@@ -61,71 +61,77 @@ def load(
     source_name: display name for in-memory data. File paths ignore this.
     """
     con = duckdb.connect(":memory:")
-    scan, resolved_path, display_name = _input_scan(con, data, source_name)
+    try:
+        scan, resolved_path, display_name = _input_scan(con, data, source_name)
 
-    # First materialize the raw scan so we know the schema for filter parsing
-    # and exclusion validation.
-    raw_info = con.execute(f"DESCRIBE SELECT * FROM {scan} LIMIT 0").fetchall()
-    raw_columns = [r[0] for r in raw_info]
-    raw_dtypes = {r[0]: r[1] for r in raw_info}
+        # First materialize the raw scan so we know the schema for filter parsing
+        # and exclusion validation.
+        raw_info = con.execute(f"DESCRIBE SELECT * FROM {scan} LIMIT 0").fetchall()
+        raw_columns = [r[0] for r in raw_info]
+        raw_dtypes = {r[0]: r[1] for r in raw_info}
 
-    select_clause = "*"
-    if exclude:
-        missing = [c for c in exclude if c not in raw_columns]
-        if missing:
-            if ignore_missing_exclude:
-                exclude = [c for c in exclude if c in raw_columns]
-            else:
-                present = [c for c in exclude if c in raw_columns]
-                raise ValueError(
-                    f"--exclude column(s) not in dataset: {missing}. "
-                    f"Valid exclusions from this request: {present}. "
-                    f"Available: {raw_columns[:8]}..."
-                )
+        select_clause = "*"
         if exclude:
-            excl = ", ".join(_quote_ident(c) for c in exclude)
-            select_clause = f"* EXCLUDE ({excl})"
+            missing = [c for c in exclude if c not in raw_columns]
+            if missing:
+                if ignore_missing_exclude:
+                    exclude = [c for c in exclude if c in raw_columns]
+                else:
+                    present = [c for c in exclude if c in raw_columns]
+                    shown = raw_columns[:8]
+                    suffix = "..." if len(raw_columns) > len(shown) else ""
+                    raise ValueError(
+                        f"--exclude column(s) not in dataset: {missing}. "
+                        f"Valid exclusions from this request: {present}. "
+                        f"Available: {shown}{suffix}"
+                    )
+            if exclude:
+                excl = ", ".join(_quote_ident(c) for c in exclude)
+                select_clause = f"* EXCLUDE ({excl})"
 
-    where_clause = ""
-    if where:
-        parts = [parse_filter_expr(expr, raw_dtypes) for expr in where]
-        where_clause = " WHERE " + " AND ".join(f"({p})" for p in parts)
+        where_clause = ""
+        if where:
+            parts = [parse_filter_expr(expr, raw_dtypes) for expr in where]
+            where_clause = " WHERE " + " AND ".join(f"({p})" for p in parts)
 
-    # Determine whether the source is file-backed (needs materialization) or
-    # already in-memory (pandas/polars/Arrow/DuckDB relation registered above).
-    is_file = scan != REGISTERED_INPUT_VIEW
+        is_file = scan != REGISTERED_INPUT_VIEW
 
-    if sample:
-        # CRITICAL: USING SAMPLE applies to the source *before* WHERE if they're
-        # in the same SELECT, so a filtered sample collapses to ~sample × fraction
-        # rows. Wrap the filtered SELECT in a subquery so the sample runs on the
-        # already-filtered data.
-        ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
-        con.execute(
-            f"{ddl} data AS "
-            f"SELECT * FROM (SELECT {select_clause} FROM {scan}{where_clause}) "
-            f"USING SAMPLE {sample} ROWS (reservoir, 42)"
+        if sample:
+            # USING SAMPLE applies to the source *before* WHERE in the same SELECT,
+            # so a filtered sample collapses to ~sample × fraction rows. Wrap the
+            # filtered SELECT in a subquery so sampling runs on the filtered data.
+            ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
+            con.execute(
+                f"{ddl} data AS "
+                f"SELECT * FROM (SELECT {select_clause} FROM {scan}{where_clause}) "
+                f"USING SAMPLE {sample} ROWS (reservoir, 42)"
+            )
+        else:
+            ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
+            con.execute(
+                f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}"
+            )
+
+        # Derive the final schema from raw_dtypes minus excluded columns
+        # rather than running a second DESCRIBE pass (which can force DuckDB
+        # to re-open the file on the CSV/Parquet path).
+        excluded = set(exclude or [])
+        columns = [c for c in raw_columns if c not in excluded]
+        dtypes = {c: raw_dtypes[c] for c in columns}
+        n_rows = con.execute("SELECT COUNT(*) FROM data").fetchone()[0]
+
+        return Source(
+            con=con,
+            source_name=display_name,
+            source_path=resolved_path,
+            n_rows=n_rows,
+            n_cols=len(columns),
+            columns=columns,
+            dtypes=dtypes,
         )
-    else:
-        ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
-        con.execute(
-            f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}"
-        )
-
-    info = con.execute("DESCRIBE data").fetchall()
-    columns = [r[0] for r in info]
-    dtypes = {r[0]: r[1] for r in info}
-    n_rows = con.execute("SELECT COUNT(*) FROM data").fetchone()[0]
-
-    return Source(
-        con=con,
-        source_name=display_name,
-        source_path=resolved_path,
-        n_rows=n_rows,
-        n_cols=len(columns),
-        columns=columns,
-        dtypes=dtypes,
-    )
+    except BaseException:
+        con.close()
+        raise
 
 
 def _input_scan(
@@ -163,17 +169,17 @@ def _materialize_relation(
     con: duckdb.DuckDBPyConnection,
     relation: duckdb.DuckDBPyRelation,
 ) -> None:
-    columns = relation.columns
-    dtypes = [str(dtype) for dtype in relation.dtypes]
-    schema = ", ".join(
-        f"{_quote_ident(name)} {dtype}" for name, dtype in zip(columns, dtypes, strict=True)
-    )
-    con.execute(f"CREATE TABLE {REGISTERED_INPUT_VIEW} ({schema})")
-    rows = relation.fetchall()
-    if not rows:
-        return
-    placeholders = ", ".join("?" for _ in columns)
-    con.executemany(f"INSERT INTO {REGISTERED_INPUT_VIEW} VALUES ({placeholders})", rows)
+    # Cross-connection relations: round-trip via Arrow so DuckDB ingests
+    # zero-copy instead of materializing Python tuples per row.
+    arrow_table = relation.arrow()
+    tmp = "__biopsy_arrow_input__"
+    con.register(tmp, arrow_table)
+    try:
+        con.execute(
+            f"CREATE TABLE {REGISTERED_INPUT_VIEW} AS SELECT * FROM {tmp}"
+        )
+    finally:
+        con.unregister(tmp)
 
 
 # --- filter expression parsing -------------------------------------------
@@ -278,23 +284,48 @@ def _find_leftmost_symbolic(expr: str) -> tuple[int, str] | None:
 
 
 def _inside_quotes(expr: str, idx: int) -> bool:
-    """True if `expr[idx]` falls inside a single- or double-quoted segment."""
-    single = 0
-    double = 0
-    for i in range(idx):
+    """True if `expr[idx]` falls inside a single- or double-quoted segment.
+
+    Doubled quotes (`''`, `""`) are treated as embedded literals and don't
+    toggle the quote state.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    while i < idx:
         c = expr[i]
-        if c == "'" and double % 2 == 0:
-            single += 1
-        elif c == '"' and single % 2 == 0:
-            double += 1
-    return single % 2 == 1 or double % 2 == 1
+        if in_single:
+            if c == "'":
+                if i + 1 < len(expr) and expr[i + 1] == "'":
+                    i += 2
+                    continue
+                in_single = False
+        elif in_double:
+            if c == '"':
+                if i + 1 < len(expr) and expr[i + 1] == '"':
+                    i += 2
+                    continue
+                in_double = False
+        else:
+            if c == "'":
+                in_single = True
+            elif c == '"':
+                in_double = True
+        i += 1
+    return in_single or in_double
 
 
 def _format_clause(
     col: str, sql_op: str, kind: str, val: str, dtypes: dict[str, str],
 ) -> str:
+    if col not in dtypes:
+        available = list(dtypes)[:8]
+        suffix = "..." if len(dtypes) > len(available) else ""
+        raise ValueError(
+            f"Unknown column in filter: {col!r}. Available: {available}{suffix}"
+        )
     qcol = _quote_ident(col)
-    col_dtype = dtypes.get(col, "VARCHAR")
+    col_dtype = dtypes[col]
     col_kind = kind_of(col_dtype)
     is_numeric = col_kind == "numeric"
 

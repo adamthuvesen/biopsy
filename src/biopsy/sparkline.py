@@ -19,8 +19,8 @@ def sparkline(counts: Sequence[float], width: int | None = None) -> str:
         resampled: list[float] = []
         for i in range(width):
             lo = int(i * bin_size)
-            hi = int((i + 1) * bin_size) or lo + 1
-            chunk = counts[lo:hi] or [counts[lo]]
+            hi = max(lo + 1, int((i + 1) * bin_size))
+            chunk = counts[lo:hi]
             resampled.append(sum(chunk) / len(chunk))
         counts = resampled
 
@@ -29,6 +29,6 @@ def sparkline(counts: Sequence[float], width: int | None = None) -> str:
         return BLOCKS[0] * len(counts)
     n_blocks = len(BLOCKS) - 1
     return "".join(
-        BLOCKS[min(int((c / hi_val) * n_blocks + 0.5), n_blocks)] if c > 0 else " "
+        BLOCKS[min(round(c / hi_val * n_blocks), n_blocks)] if c > 0 else " "
         for c in counts
     )

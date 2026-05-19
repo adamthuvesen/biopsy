@@ -19,6 +19,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from biopsy.correlations import _spearman, _valid_mask, pps
 from biopsy.io import Source
+from biopsy.matrix import _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
 
 # --- thresholds (single source of truth) ----------------------------------
@@ -149,13 +150,7 @@ def temporal_signals(
     # Determine target kind early so we can pull the target alongside features.
     target_kind: str | None = None
     if target and target in stats:
-        ts = stats[target]
-        target_kind = (
-            "classification" if (
-                ts.kind in {"text", "bool"} or
-                (ts.kind == "numeric" and ts.n_unique <= 20)
-            ) else "regression"
-        )
+        target_kind = _target_kind(stats[target])
 
     # Pick the feature set — same eligibility as target_signal.
     features = [
@@ -177,18 +172,20 @@ def temporal_signals(
 
     # Filter missing timestamps before sampling; DuckDB applies USING SAMPLE to
     # the relation it is attached to.
-    rel = src.con.execute(f"""
+    raw = _fetch_object_array(
+        src.con,
+        f"""
         SELECT {quoted}
         FROM (
             SELECT {quoted} FROM data
             WHERE {_quote(time_col)} IS NOT NULL
         ) USING SAMPLE {max_rows} ROWS (reservoir, 42)
         ORDER BY {_quote(time_col)}
-    """)
-    sample = rel.fetchall()
-    if len(sample) < MIN_ROWS:
+        """,
+        cols_to_pull,
+    )
+    if raw.shape[0] < MIN_ROWS:
         return None
-    raw = np.array(sample, dtype=object)
 
     time_values = raw[:, -1]
     time_as_float = _time_to_float(time_values)
@@ -220,17 +217,15 @@ def temporal_signals(
             y_full[target_valid] = np.asarray(y_raw[target_valid], dtype=np.float64)
 
     # Per-feature analysis
-    signals: list[TemporalSignal] = []
-    monotonic_flags = 0
-
-    for j, feat in enumerate(features):
+    def _run_feature(j: int, feat: str) -> TemporalSignal | None:
         feat_valid = _valid_mask(raw[:, j])
-        feat_signal = _analyze_feature(
+        return _analyze_feature(
             feat=feat,
             kind=stats[feat].kind,
             x_raw=raw[:, j],
             feat_valid=feat_valid,
             time_as_float=time_as_float,
+            split_point=split_point,
             early_idx=early_idx,
             late_idx=late_idx,
             random_train_idx=random_train_idx,
@@ -242,6 +237,23 @@ def temporal_signals(
             n_rows=stats[feat].n,
             n_nulls=stats[feat].n_null,
         )
+
+    # Parallelize the per-feature loop when it's wide enough to amortize
+    # joblib's process-fork cost. Each call fits up to two decision trees,
+    # which is CPU-bound and embarrassingly parallel.
+    results: list[TemporalSignal | None]
+    if len(features) >= 16:
+        from joblib import Parallel, delayed
+
+        results = Parallel(n_jobs=-1, prefer="processes")(
+            delayed(_run_feature)(j, feat) for j, feat in enumerate(features)
+        )
+    else:
+        results = [_run_feature(j, feat) for j, feat in enumerate(features)]
+
+    signals: list[TemporalSignal] = []
+    monotonic_flags = 0
+    for feat_signal in results:
         if feat_signal is None:
             continue
         if feat_signal.time_monotonicity and feat_signal.time_monotonicity >= MONOTONIC_THRESHOLD:
@@ -285,6 +297,7 @@ def _analyze_feature(
     x_raw: np.ndarray,
     feat_valid: np.ndarray,
     time_as_float: np.ndarray,
+    split_point: int,
     early_idx: np.ndarray,
     late_idx: np.ndarray,
     random_train_idx: np.ndarray,
@@ -311,7 +324,6 @@ def _analyze_feature(
         encoded = LabelEncoder().fit_transform(x_raw[feat_valid].astype(str)).astype(np.float64)
         x_enc[feat_valid] = encoded
 
-    split_point = int(early_idx[-1]) + 1 if len(early_idx) else 0
     drift_ks = _drift_stat(
         x_raw[:split_point][feat_valid[:split_point]],
         x_raw[split_point:][feat_valid[split_point:]],
@@ -456,7 +468,9 @@ def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
     if len(classes) < 2:
         return False
     if len(classes) == 2:
-        return bool(np.any(counts >= MIN_TEST_POSITIVES_CLASSIF))
+        # Both classes need real support — a 5000/3 split passes f1_weighted
+        # but its time_pps signal is unreliable and feeds leakage detection.
+        return bool(counts.min() >= MIN_TEST_POSITIVES_CLASSIF)
     return len(y) >= MIN_TEST_POSITIVES_CLASSIF
 
 
@@ -464,6 +478,17 @@ def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
 
 def _time_to_float(values: np.ndarray) -> np.ndarray:
     """Convert temporal values to a float scalar suitable for ranking."""
+    # Try the vectorized path first: pandas understands native datetimes,
+    # numpy datetime64, and string ISO timestamps in one pass. Anything that
+    # fails to parse falls through to a per-row fallback.
+    import pandas as pd
+
+    try:
+        parsed = pd.to_datetime(values, errors="coerce", utc=False)
+        return np.asarray(parsed.astype("datetime64[s]").astype(np.int64), dtype=np.float64)
+    except (TypeError, ValueError):
+        pass
+
     out = np.empty(len(values), dtype=np.float64)
     for i, v in enumerate(values):
         if v is None:
@@ -492,15 +517,23 @@ def _drift_stat(early: np.ndarray, late: np.ndarray, kind: str) -> float | None:
             return None
         stat = ks_2samp(early_f, late_f, alternative="two-sided", method="auto").statistic
         return float(stat)
-    # categorical / boolean: total variation distance on top-k frequencies
+    # categorical / boolean: total variation distance on top-k frequencies.
     early_str = early.astype(str)
     late_str = late.astype(str)
-    cats = np.unique(np.concatenate([early_str, late_str]))
-    if len(cats) > 100:
+    # Single sort+count per side via np.unique with return_counts — replaces
+    # the O(K·N) per-category mean() loop with two O(N log N) passes.
+    e_cats, e_counts = np.unique(early_str, return_counts=True)
+    l_cats, l_counts = np.unique(late_str, return_counts=True)
+    if len(set(e_cats) | set(l_cats)) > 100:
         return None
-    e_freq = np.array([(early_str == c).mean() for c in cats])
-    l_freq = np.array([(late_str == c).mean() for c in cats])
-    return float(0.5 * np.abs(e_freq - l_freq).sum())
+    e_total = e_counts.sum()
+    l_total = l_counts.sum()
+    e_lookup = dict(zip(e_cats, e_counts / e_total, strict=True))
+    l_lookup = dict(zip(l_cats, l_counts / l_total, strict=True))
+    tv = 0.0
+    for cat in e_lookup.keys() | l_lookup.keys():
+        tv += abs(e_lookup.get(cat, 0.0) - l_lookup.get(cat, 0.0))
+    return float(0.5 * tv)
 
 
 def _time_bucket_summary(
@@ -524,17 +557,14 @@ def _time_bucket_summary(
     qtarget = _quote(target)
     target_kind = _target_kind(t_stats)
     if target_kind == "classification":
-        positive_value = src.con.execute(f"""
-            SELECT {qtarget}::VARCHAR
-            FROM data
-            WHERE {qtarget} IS NOT NULL
-            GROUP BY 1
-            ORDER BY 1 DESC
-            LIMIT 1
-        """).fetchone()
-        if positive_value is None:
+        # Pick the minority class as "positive" — that's the rare event whose
+        # drift matters. Lexicographic ORDER BY 1 DESC happens to pick the
+        # majority class for binary numeric targets (1 > 0), which is the
+        # wrong thing.
+        if not t_stats.top_values:
             return []
-        pos = str(positive_value[0]).replace("'", "''")
+        positive_value = min(t_stats.top_values, key=lambda v_c: v_c[1])[0]
+        pos = str(positive_value).replace("'", "''")
         rows = src.con.execute(f"""
             SELECT
                 {qtime}::VARCHAR AS bucket,
@@ -605,14 +635,18 @@ def _target_drift_from_buckets(
         if len(rates) < 2:
             return None, None, None
         drift = float(max(rates) - min(rates))
-        drift_kind = "binary" if target_stats.n_unique == 2 else "multiclass"
-        return drift, drift_kind, drift
+        # We only track the minority class in _time_bucket_summary; for K>2 the
+        # bucket-derived drift only reflects that one class, so it's still
+        # "binary" in shape. _target_drift covers true multiclass when enough
+        # rows survive sampling.
+        return drift, "binary", drift
 
     means = [b.target_mean for b in buckets if b.target_mean is not None]
     if len(means) < 2:
         return None, None, None
-    if min(means) > 0:
-        drift = float(max(means) / min(means))
+    if min(means) > 0 or max(means) < 0:
+        abs_means = [abs(m) for m in means]
+        drift = float(max(abs_means) / min(abs_means))
         return drift, "regression_ratio", drift
     diff = float(max(means) - min(means))
     return diff, "regression_diff", None
@@ -624,17 +658,7 @@ def _target_drift(
     target_kind: str | None,
     time_as_float: np.ndarray,
 ) -> tuple[float | None, str | None, float | None]:
-    """Drift across time deciles, with the kind label honest about its units.
-
-    Returns (drift, kind, threshold_score):
-      ("binary",            max_rate - min_rate)    — only for 2-class targets
-      ("regression_ratio",  max_mean / min_mean)    — strictly-positive regression targets
-      ("regression_diff",   max_mean - min_mean)    — regression targets that can be ≤ 0
-      ("multiclass",        max_class_rate_drift)   — for K>2 classification: maximum
-                                                       per-class rate range across deciles
-    For regression_diff, threshold_score is the mean range scaled by target IQR
-    (or standard deviation if IQR is zero).
-    """
+    """Drift across time deciles. Kinds: binary | multiclass | regression_ratio | regression_diff."""
     if y_full is None or target_valid is None or target_kind is None:
         return None, None, None
     mask = target_valid & ~np.isnan(time_as_float)
@@ -645,30 +669,28 @@ def _target_drift(
     order = np.argsort(t)
     y_sorted = y[order]
 
-    # split rows into 10 chronological deciles
-    deciles = [d for d in np.array_split(y_sorted, 10) if len(d) > 0]
-    if len(deciles) < 5:
-        return None, None, None
+    # split rows into 10 chronological deciles. mask>=100 guarantees each is >=10.
+    deciles = np.array_split(y_sorted, 10)
 
     if target_kind == "classification":
         unique_classes = np.unique(y)
         if len(unique_classes) == 2:
-            # treat 1 as positive class regardless of label encoding
             pos = unique_classes.max()
             rates = np.array([(d == pos).mean() for d in deciles])
             drift = float(rates.max() - rates.min())
             return drift, "binary", drift
-        # multi-class: per-class positive-rate range across deciles; report max
         max_drift = 0.0
         for c in unique_classes:
             rates = np.array([(d == c).mean() for d in deciles])
             max_drift = max(max_drift, float(rates.max() - rates.min()))
         return max_drift, "multiclass", max_drift
 
-    # regression
+    # regression: ratio when means are strictly positive OR strictly negative
+    # (in absolute value), otherwise fall back to scaled difference.
     means = np.array([float(d.astype(np.float64).mean()) for d in deciles])
-    if means.min() > 0:
-        drift = float(means.max() / means.min())
+    if means.min() > 0 or means.max() < 0:
+        abs_means = np.abs(means)
+        drift = float(abs_means.max() / abs_means.min())
         return drift, "regression_ratio", drift
     diff = float(means.max() - means.min())
     scale = _target_scale(y.astype(np.float64))

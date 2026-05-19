@@ -10,7 +10,6 @@ Charts share a single Plotly template; no gridline clutter, no chart junk.
 from __future__ import annotations
 
 import html as html_lib
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from plotly.offline import get_plotlyjs
 from biopsy.correlations import CorrelationPair, TargetSignal
 from biopsy.findings import Finding
 from biopsy.profile import Profile
-from biopsy.stats import ColumnStats
+from biopsy.stats import _NUMERIC_TYPES, ColumnStats
 from biopsy.temporal import TemporalReport, TemporalSignal
 
 # --- palette (forensic editorial) ------------------------------------------
@@ -49,6 +48,24 @@ OK = "#166534"         # forest
 DARK_INK = "#F5F0E6"
 DARK_SURFACE = "#1A1714"
 DARK_LINE = "#3A332C"
+
+
+_BASE_PALETTE: dict[str, str] = {
+    "ink": INK, "ink_2": INK_2, "ink_3": INK_3, "ink_4": INK_4,
+    "surface": SURFACE, "surface_2": SURFACE_2,
+    "line": LINE, "line_2": LINE_2,
+    "accent": ACCENT, "accent_soft": ACCENT_SOFT, "accent_deep": ACCENT_DEEP,
+    "warn": WARN, "crit": CRIT, "ok": OK,
+}
+
+
+def _palette(*, include_dark: bool) -> dict[str, str]:
+    if not include_dark:
+        return dict(_BASE_PALETTE)
+    return {
+        **_BASE_PALETTE,
+        "dark_ink": DARK_INK, "dark_surface": DARK_SURFACE, "dark_line": DARK_LINE,
+    }
 
 SEVERITY_COLOR = {"critical": CRIT, "warning": WARN, "info": INK_2}
 
@@ -102,12 +119,17 @@ def _ensure_template() -> None:
 
 # --- chart builders --------------------------------------------------------
 
+def _hist_unpack(histogram: list[tuple[float, float, int]]) -> tuple[list[float], list[float], list[int]]:
+    centers = [(lo + hi) / 2 for lo, hi, _ in histogram]
+    widths = [hi - lo for lo, hi, _ in histogram]
+    counts = [c for *_b, c in histogram]
+    return centers, widths, counts
+
+
 def _histogram_fig(s: ColumnStats) -> str:
     if not s.histogram:
         return ""
-    centers = [(lo + hi) / 2 for lo, hi, _ in s.histogram]
-    widths = [hi - lo for lo, hi, _ in s.histogram]
-    counts = [c for *_b, c in s.histogram]
+    centers, widths, counts = _hist_unpack(s.histogram)
 
     fig = go.Figure()
     fig.add_bar(
@@ -622,14 +644,7 @@ def render_string(
         severity_color=SEVERITY_COLOR,
         plotly_cdn=None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js",
         plotly_js=get_plotlyjs() if embed_plotly else None,
-        palette={
-            "ink": INK, "ink_2": INK_2, "ink_3": INK_3, "ink_4": INK_4,
-            "surface": SURFACE, "surface_2": SURFACE_2,
-            "line": LINE, "line_2": LINE_2,
-            "accent": ACCENT, "accent_soft": ACCENT_SOFT, "accent_deep": ACCENT_DEEP,
-            "warn": WARN, "crit": CRIT, "ok": OK,
-            "dark_ink": DARK_INK, "dark_surface": DARK_SURFACE, "dark_line": DARK_LINE,
-        },
+        palette=_palette(include_dark=True),
     )
     return html
 
@@ -653,10 +668,8 @@ def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
     histogram bars; categorical uses top-K category counts.
     """
     if sa.kind == "numeric" and sb.kind == "numeric" and sa.histogram and sb.histogram:
-        x_a = [0.5 * (lo + hi) for lo, hi, _ in sa.histogram]
-        y_a = [c for _, _, c in sa.histogram]
-        x_b = [0.5 * (lo + hi) for lo, hi, _ in sb.histogram]
-        y_b = [c for _, _, c in sb.histogram]
+        x_a, _wa, y_a = _hist_unpack(sa.histogram)
+        x_b, _wb, y_b = _hist_unpack(sb.histogram)
         fig = go.Figure()
         fig.add_bar(x=x_a, y=y_a, name="A", marker=dict(color=ACCENT), opacity=0.55)
         fig.add_bar(x=x_b, y=y_b, name="B", marker=dict(color="#1E3A8A"), opacity=0.55)
@@ -669,8 +682,8 @@ def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
         )
         return _div(fig)
     if sa.top_values or sb.top_values:
-        a_counts = {str(k): c for k, c in sa.top_values if isinstance(c, (int, float))}
-        b_counts = {str(k): c for k, c in sb.top_values if isinstance(c, (int, float))}
+        a_counts = {str(k): c for k, c in sa.top_values if isinstance(c, _NUMERIC_TYPES)}
+        b_counts = {str(k): c for k, c in sb.top_values if isinstance(c, _NUMERIC_TYPES)}
         labels = sorted(
             set(a_counts) | set(b_counts),
             key=lambda k: -(a_counts.get(k, 0) + b_counts.get(k, 0)),
@@ -717,6 +730,7 @@ def render_compare(
     env.filters["pct"] = lambda x: "—" if x is None else f"{x:+.2%}"
     env.filters["sig"] = lambda x: "—" if x is None else f"{x:.3g}"
     env.filters["ticks"] = _ticks_filter
+    env.filters["commafy"] = lambda x: f"{x:,}"
     tpl = env.get_template("compare.html.j2")
     # Pre-render per-feature comparison charts for the top-N drifted columns.
     feature_cards = []
@@ -741,13 +755,7 @@ def render_compare(
         feature_cards=feature_cards,
         plotly_cdn=None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js",
         plotly_js=get_plotlyjs() if embed_plotly else None,
-        palette={
-            "ink": INK, "ink_2": INK_2, "ink_3": INK_3, "ink_4": INK_4,
-            "surface": SURFACE, "surface_2": SURFACE_2,
-            "line": LINE, "line_2": LINE_2,
-            "accent": ACCENT, "accent_soft": ACCENT_SOFT, "accent_deep": ACCENT_DEEP,
-            "warn": WARN, "crit": CRIT, "ok": OK,
-        },
+        palette=_palette(include_dark=False),
     )
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -791,6 +799,8 @@ def _num(x: float | None) -> str:
         return "—"
     if isinstance(x, str):
         return x
+    if isinstance(x, int) or (isinstance(x, float) and x.is_integer()):
+        return f"{int(x):,}"
     ax = abs(x)
     if ax == 0:
         return "0"
@@ -799,8 +809,3 @@ def _num(x: float | None) -> str:
     if ax >= 100:
         return f"{x:,.2f}"
     return f"{x:.4g}"
-
-
-# expose JSON helper for tests
-def _payload(prof: Profile) -> str:
-    return json.dumps({"n_rows": prof.n_rows, "n_cols": prof.n_cols})
