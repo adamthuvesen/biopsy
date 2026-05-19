@@ -213,11 +213,12 @@ def _scan_from_uri(
         from biopsy.warehouse.object_store import open_object_store
 
         result = open_object_store(con, parsed, credentials_env=credentials_env)
+    elif scheme in {"postgres", "postgresql"}:
+        from biopsy.warehouse.postgres import open_postgres
+
+        result = open_postgres(con, parsed, credentials_env=credentials_env)
     else:
-        # Postgres / BigQuery / Snowflake adapters land here in later
-        # changes. For now, refuse with a clear message — the URI parser
-        # already accepted the scheme, so the user has installed biopsy
-        # but expected an adapter that isn't yet implemented.
+        # BigQuery / Snowflake adapters land here in later changes.
         raise NotImplementedError(
             f"Adapter for scheme '{scheme}' is not yet implemented. "
             "Tracking issue: warehouse-connector change, follow-up sections."

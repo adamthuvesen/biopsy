@@ -163,19 +163,22 @@ Biopsy profiles data where it lives — no need to export to Parquet first. Pass
 
 ```bash
 biopsy profile s3://my-bucket/events.parquet --target conversion
+biopsy profile postgres://localhost/sales?table=public.orders --target shipped
 biopsy profile https://host/data.csv --sample 20000
 biopsy doctor s3://my-bucket/big.parquet           # reads the Parquet footer; no row data transferred
+biopsy doctor postgres://host/db?table=public.events  # information_schema lookup; no row data transferred
 ```
 
-Read-only / pull-only by construction. Biopsy never writes back to a warehouse — adapters only issue `SELECT`s, enforced by a lint test in CI. The `--sample N` flag becomes `LIMIT N` against warehouse sources (head-of-table, not random); use `--filter` for stratification.
+Read-only / pull-only by construction. Biopsy never writes back to a warehouse — adapters only issue `SELECT`s, enforced by a lint test in CI. For Postgres, the connection is ATTACHed `READ_ONLY` and the session sets `default_transaction_read_only=on`, so even a future code path that issued a mutation would be rejected server-side. The `--sample N` flag becomes `LIMIT N` against warehouse sources (head-of-table, not random); use `--filter` for stratification.
 
-Object-store auth comes from environment variables. Credentials never appear on the command line, in saved profiles, or in progress output:
+Auth comes from environment variables. Credentials never appear on the command line, in saved profiles, or in progress output:
 
 | Scheme | Required env vars |
 |---|---|
 | `s3://`, `s3a://` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `AWS_REGION` |
 | `gs://`, `gcs://` | `GOOGLE_APPLICATION_CREDENTIALS` (path to service-account JSON) |
 | `https://`, `http://` | none required (public). Optional `BIOPSY_HTTPS_BEARER` for bearer auth (future) |
+| `postgres://`, `postgresql://` | libpq vars: `PGUSER`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE`, optional `PGSSLMODE`. URI host/port/db override env. |
 
 Use a different credential set with `--credentials-env PREFIX`:
 
@@ -188,11 +191,12 @@ Install backends as needed (none are required for the default install):
 
 ```bash
 pip install 'biopsy[object-store]'        # S3, HTTPS, GCS (no extra Python deps; uses DuckDB httpfs)
-pip install 'biopsy[warehouse]'           # everything (also includes snowflake/bigquery/postgres extras)
+pip install 'biopsy[postgres]'            # Postgres / Redshift (no extra Python deps; uses DuckDB postgres extension)
+pip install 'biopsy[warehouse]'           # everything (also includes snowflake/bigquery extras)
 ```
 
-**Currently shipped:** S3, HTTPS, GCS via DuckDB's `httpfs` extension.
-**Planned (follow-up changes):** Postgres (DuckDB extension), BigQuery, Snowflake.
+**Currently shipped:** S3, HTTPS, GCS via DuckDB's `httpfs` extension. Postgres (and protocol-compatible Redshift) via DuckDB's `postgres` extension.
+**Planned (follow-up changes):** BigQuery, Snowflake.
 
 ## CLI
 
