@@ -164,12 +164,20 @@ Biopsy profiles data where it lives — no need to export to Parquet first. Pass
 ```bash
 biopsy profile s3://my-bucket/events.parquet --target conversion
 biopsy profile postgres://localhost/sales?table=public.orders --target shipped
+biopsy profile bigquery://my-project/analytics.events --target conversion --sample 50000
+biopsy profile snowflake://my-acct/SALES.PUBLIC.ORDERS --target shipped --sample 50000
 biopsy profile https://host/data.csv --sample 20000
-biopsy doctor s3://my-bucket/big.parquet           # reads the Parquet footer; no row data transferred
-biopsy doctor postgres://host/db?table=public.events  # information_schema lookup; no row data transferred
+
+# `doctor` runs schema-only — no row data transferred for any warehouse source.
+biopsy doctor s3://my-bucket/big.parquet              # reads the Parquet footer
+biopsy doctor postgres://host/db?table=public.events  # information_schema + pg_class
+biopsy doctor bigquery://my-project/analytics.events  # information_schema + __TABLES__
+biopsy doctor snowflake://my-acct/SALES.PUBLIC.ORDERS # information_schema
 ```
 
-Read-only / pull-only by construction. Biopsy never writes back to a warehouse — adapters only issue `SELECT`s, enforced by a lint test in CI. For Postgres, the connection is ATTACHed `READ_ONLY` and the session sets `default_transaction_read_only=on`, so even a future code path that issued a mutation would be rejected server-side. The `--sample N` flag becomes `LIMIT N` against warehouse sources (head-of-table, not random); use `--filter` for stratification.
+Read-only / pull-only by construction. Biopsy never writes back to a warehouse — adapters only issue `SELECT`s, enforced by a lint test in CI. Per-backend safety nets layer on top: Postgres uses `ATTACH … READ_ONLY` + session `default_transaction_read_only=on`; BigQuery/Snowflake adapters issue only `SELECT` via their vendor clients.
+
+The `--sample N` flag becomes `LIMIT N` against warehouse sources (head-of-table, not random); use `--filter` for stratification. For BigQuery and Snowflake, `--filter` predicates are pushed into the remote `SELECT` so the table never transfers in full. BigQuery runs a dry-run estimate first and warns above ~5 GB scanned; Snowflake warns when the Arrow materialization would exceed ~5×10⁸ cells.
 
 Auth comes from environment variables. Credentials never appear on the command line, in saved profiles, or in progress output:
 
@@ -179,6 +187,8 @@ Auth comes from environment variables. Credentials never appear on the command l
 | `gs://`, `gcs://` | `GOOGLE_APPLICATION_CREDENTIALS` (path to service-account JSON) |
 | `https://`, `http://` | none required (public). Optional `BIOPSY_HTTPS_BEARER` for bearer auth (future) |
 | `postgres://`, `postgresql://` | libpq vars: `PGUSER`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE`, optional `PGSSLMODE`. URI host/port/db override env. |
+| `bigquery://` | `GOOGLE_APPLICATION_CREDENTIALS`, optional `BIGQUERY_PROJECT` (URI host overrides). |
+| `snowflake://` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, plus `SNOWFLAKE_PRIVATE_KEY_PATH` (key-pair) **or** `SNOWFLAKE_PASSWORD`. Optional: `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_ROLE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`. |
 
 Use a different credential set with `--credentials-env PREFIX`:
 
@@ -190,13 +200,12 @@ biopsy profile s3://staging-bucket/events.parquet --credentials-env STAGING
 Install backends as needed (none are required for the default install):
 
 ```bash
-pip install 'biopsy[object-store]'        # S3, HTTPS, GCS (no extra Python deps; uses DuckDB httpfs)
-pip install 'biopsy[postgres]'            # Postgres / Redshift (no extra Python deps; uses DuckDB postgres extension)
-pip install 'biopsy[warehouse]'           # everything (also includes snowflake/bigquery extras)
+pip install 'biopsy[object-store]'   # S3, HTTPS, GCS (no extra Python deps; uses DuckDB httpfs)
+pip install 'biopsy[postgres]'       # Postgres / Redshift (no extra Python deps; uses DuckDB postgres extension)
+pip install 'biopsy[bigquery]'       # BigQuery via google-cloud-bigquery
+pip install 'biopsy[snowflake]'      # Snowflake via snowflake-connector-python
+pip install 'biopsy[warehouse]'      # everything
 ```
-
-**Currently shipped:** S3, HTTPS, GCS via DuckDB's `httpfs` extension. Postgres (and protocol-compatible Redshift) via DuckDB's `postgres` extension.
-**Planned (follow-up changes):** BigQuery, Snowflake.
 
 ## CLI
 
