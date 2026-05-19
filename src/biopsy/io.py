@@ -69,8 +69,11 @@ def load(
     """
     con = duckdb.connect(":memory:")
     try:
-        scan, resolved_path, display_name, resolved_uri = _input_scan(
-            con, data, source_name, credentials_env=credentials_env,
+        scan, resolved_path, display_name, resolved_uri, pushed_down = _input_scan(
+            con, data, source_name,
+            credentials_env=credentials_env,
+            where=where,
+            sample=sample,
         )
 
         # First materialize the raw scan so we know the schema for filter parsing
@@ -98,14 +101,18 @@ def load(
                 excl = ", ".join(_quote_ident(c) for c in exclude)
                 select_clause = f"* EXCLUDE ({excl})"
 
+        # Arrow-backed warehouse adapters apply WHERE / LIMIT at the remote
+        # source. Skip biopsy's outer wrapper in that case so we don't
+        # double-apply (and so user predicates aren't re-parsed against
+        # DuckDB's SQL dialect, which would fail on vendor-specific syntax).
         where_clause = ""
-        if where:
+        if where and not pushed_down:
             parts = [parse_filter_expr(expr, raw_dtypes) for expr in where]
             where_clause = " WHERE " + " AND ".join(f"({p})" for p in parts)
 
         is_file = scan != REGISTERED_INPUT_VIEW
 
-        if sample:
+        if sample and not pushed_down:
             # USING SAMPLE applies to the source *before* WHERE in the same SELECT,
             # so a filtered sample collapses to ~sample × fraction rows. Wrap the
             # filtered SELECT in a subquery so sampling runs on the filtered data.
@@ -150,12 +157,20 @@ def _input_scan(
     source_name: str | None,
     *,
     credentials_env: str | None = None,
-) -> tuple[str, Path | None, str, str | None]:
-    """Resolve `data` into a (scan_expr, path, display_name, uri) tuple.
+    where: list[str] | None = None,
+    sample: int | None = None,
+) -> tuple[str, Path | None, str, str | None, bool]:
+    """Resolve `data` into a (scan_expr, path, display_name, uri, pushed_down)
+    tuple.
 
     Dispatches in order: URI scheme → file path → DuckDB relation →
     DuckDB-registerable object. Only one branch ever returns a non-None
     `path` OR `uri` — they're mutually exclusive.
+
+    `pushed_down=True` is returned only when a warehouse adapter applied
+    `where`/`sample` at the remote source itself. For all other inputs
+    (paths, in-memory frames, DuckDB-extension warehouse sources), the
+    caller's outer `WHERE`/`USING SAMPLE` wrapper does the work.
     """
     if isinstance(data, str | Path):
         text = str(data)
@@ -165,19 +180,22 @@ def _input_scan(
 
         parsed = parse_warehouse_uri(text)
         if parsed is not None:
-            scan_expr, qualified, display = _scan_from_uri(
-                con, parsed, credentials_env=credentials_env,
+            scan_expr, qualified, display, pushed_down = _scan_from_uri(
+                con, parsed,
+                credentials_env=credentials_env,
+                where=where,
+                sample=sample,
             )
-            return scan_expr, None, display, qualified
+            return scan_expr, None, display, qualified, pushed_down
 
         path = Path(data).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
-        return _scan_expr(path), path, path.name, None
+        return _scan_expr(path), path, path.name, None, False
 
     if isinstance(data, duckdb.DuckDBPyRelation):
         _materialize_relation(con, data)
-        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None
+        return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False
 
     try:
         con.register(REGISTERED_INPUT_VIEW, data)
@@ -192,7 +210,7 @@ def _input_scan(
             "DuckDB-registerable table such as a pandas DataFrame, Polars "
             "DataFrame/LazyFrame, Arrow table, or DuckDB relation."
         ) from exc
-    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None
+    return REGISTERED_INPUT_VIEW, None, source_name or "dataframe", None, False
 
 
 def _scan_from_uri(
@@ -200,14 +218,25 @@ def _scan_from_uri(
     parsed: Any,
     *,
     credentials_env: str | None = None,
-) -> tuple[str, str, str]:
+    where: list[str] | None = None,
+    sample: int | None = None,
+) -> tuple[str, str, str, bool]:
     """Dispatch a parsed URI to its scheme adapter.
 
-    Object stores (s3/https/gs) and Postgres use DuckDB extensions and
-    return a SQL scan expression usable directly in FROM. Snowflake /
-    BigQuery (when falling back to the Python client) return an Arrow
-    table; we register it as the standard input view.
+    DuckDB-extension adapters (object-store, Postgres) return a SQL scan
+    expression DuckDB can read directly; biopsy's outer wrapper applies
+    push-down via DuckDB. Arrow-via-vendor-client adapters (Snowflake,
+    BigQuery) build the remote SELECT themselves with WHERE / LIMIT
+    baked in, return an Arrow table, and signal `pushed_down=True` so
+    biopsy doesn't re-apply.
     """
+    from biopsy.warehouse._base import ScanOptions
+
+    options = ScanOptions(
+        where_sql=list(where or []),
+        limit=sample,
+        credentials_prefix=credentials_env,
+    )
     scheme = parsed.scheme
     if scheme in {"s3", "s3a", "https", "http", "gs", "gcs"}:
         from biopsy.warehouse.object_store import open_object_store
@@ -217,18 +246,25 @@ def _scan_from_uri(
         from biopsy.warehouse.postgres import open_postgres
 
         result = open_postgres(con, parsed, credentials_env=credentials_env)
+    elif scheme == "bigquery":
+        from biopsy.warehouse.bigquery import open_bigquery
+
+        result = open_bigquery(con, parsed, options=options)
+    elif scheme == "snowflake":
+        from biopsy.warehouse.snowflake import open_snowflake
+
+        result = open_snowflake(con, parsed, options=options)
     else:
-        # BigQuery / Snowflake adapters land here in later changes.
         raise NotImplementedError(
-            f"Adapter for scheme '{scheme}' is not yet implemented. "
-            "Tracking issue: warehouse-connector change, follow-up sections."
+            f"Adapter for scheme '{scheme}' is not yet implemented."
         )
 
+    display = _display_for_uri(parsed)
     if result.scan_sql is not None:
-        return result.scan_sql, result.qualified_name, _display_for_uri(parsed)
+        return result.scan_sql, result.qualified_name, display, result.pushed_down
     if result.arrow_table is not None:
         con.register(REGISTERED_INPUT_VIEW, result.arrow_table)
-        return REGISTERED_INPUT_VIEW, result.qualified_name, _display_for_uri(parsed)
+        return REGISTERED_INPUT_VIEW, result.qualified_name, display, result.pushed_down
     raise RuntimeError(
         f"Adapter for '{scheme}' returned neither scan_sql nor arrow_table."
     )

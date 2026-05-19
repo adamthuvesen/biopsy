@@ -96,9 +96,10 @@ class AdapterResult:
 
     Exactly one of `scan_sql` or `arrow_table` is populated:
       - `scan_sql`: a `FROM <expr>` source DuckDB can read directly
-        (DuckDB extensions: postgres, bigquery, httpfs).
+        (DuckDB extensions: postgres, httpfs).
       - `arrow_table`: an in-memory Arrow table biopsy registers with
-        DuckDB the same way it handles user-supplied frames (Snowflake).
+        DuckDB the same way it handles user-supplied frames (Snowflake,
+        BigQuery via the Python client).
 
     `qualified_name` is the credential-free URI; biopsy stores it on
     `Source.source_uri` and uses it as the display name.
@@ -106,12 +107,21 @@ class AdapterResult:
     `cleanup` is called after the local `data` table is materialized —
     e.g. detaching a Postgres connection. It MUST be safe to call multiple
     times and SHOULD NOT raise.
+
+    `pushed_down=True` signals that the adapter already applied the
+    caller's `ScanOptions.where_sql` and `ScanOptions.limit` at the remote
+    source. `load()` then skips its outer `WHERE`/`USING SAMPLE` wrapper
+    so we don't filter twice (which would be wasteful and would re-evaluate
+    user predicates against DuckDB's parser, breaking on vendor-specific
+    SQL). Default `False` matches existing scan-SQL adapters (Postgres,
+    object-store) where DuckDB does the push-down via its wrapper.
     """
 
     qualified_name: str
     scan_sql: str | None = None
     arrow_table: pa.Table | None = None
     cleanup: Callable[[], None] | None = None
+    pushed_down: bool = False
 
 
 def parse_warehouse_uri(value: str) -> ParsedURI | None:
