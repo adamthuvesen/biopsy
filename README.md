@@ -1,6 +1,5 @@
 # biopsy
 
-![demo](assets/demo.gif)
 
 ML-focused EDA. Point it at a file or dataframe and get a ranked report of the modeling risks worth acting on first: leakage, target signal, drift, nulls, outliers, redundancy.
 

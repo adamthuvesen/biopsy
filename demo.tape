@@ -4,7 +4,7 @@ Set Shell "zsh"
 Set FontSize 12
 Set Width 1100
 Set Height 900
-Set Theme "Catppuccin Mocha"
+Set Theme "AtomOneLight"
 Set Padding 16
 Set TypingSpeed 55ms
 Set PlaybackSpeed 1.25
