@@ -1,16 +1,15 @@
 # biopsy
 
-
-ML-focused EDA. Point it at a file or dataframe and get a ranked report of the modeling risks worth acting on first: leakage, target signal, drift, nulls, outliers, redundancy.
+ML-focused EDA. Rank features by predictive signal (PPS, MI, AUC, permutation importance), pick a non-redundant modeling shortlist via correlation clustering, and emit a runnable sklearn preprocessor. Catches leakage, drift, and quality issues along the way.
 
 ```python
 from biopsy import profile
 
 prof = profile(df, target="label")
 
-prof.top_findings()
-prof.leakage_suspects()
-prof.feature_shortlist(limit=20)
+prof.feature_shortlist(limit=20)   # non-redundant features, ranked by signal
+prof.target_signal_records()       # PPS / MI / ρ / AUC / perm importance per feature
+prof.top_findings()                # findings ranked by severity
 prof.action_plan()                 # drop / impute / encode / transform / split / cv
 prof.to_sklearn_pipeline_code()    # runnable ColumnTransformer module
 ```
@@ -29,17 +28,17 @@ biopsy demo --rows 5000
 
 ## Why
 
-`ydata-profiling`, SweetViz, and DataPrep generate broad reports. `biopsy` ranks. The default view is short enough to read before training a model.
+`ydata-profiling`, SweetViz, and DataPrep generate broad descriptive reports. `biopsy` ranks features by predictive signal and emits a runnable preprocessing pipeline — short enough to read before training a model, actionable enough to skip the boilerplate.
 
 ## What it reports
 
+- **Target signal** — every feature ranked by MI, PPS, Spearman, raw AUC, AUC lift; optional permutation importance, bootstrap CIs, and multi-seed PPS stability in `--deep` mode
+- **Feature shortlist** — Spearman-distance clustering picks one representative per correlated group, ranked by signal — the non-redundant features worth modeling with
+- **Correlations** — Pearson in DuckDB SQL plus a non-linear MI pass that catches what Pearson misses
+- **Action plan** — drop / impute / encode / transform buckets, a split + CV + class-imbalance recommendation, and a runnable sklearn `ColumnTransformer` module
 - **Distributions** — histograms, skew, outliers, near-constant columns
 - **Data quality** — null rates, empty columns, identifiers, cardinality, encoded null sentinels, date-strings, bool-like ints, free-text
-- **Target signal** — MI, PPS, Spearman, raw AUC, AUC lift, optional permutation importance, optional bootstrap CIs and multi-seed PPS stability
-- **Redundancy** — Spearman-distance clustering with a feature shortlist
-- **Temporal leakage** — random-vs-time split gaps, monotonicity, target drift, post-event signals
-- **Correlations** — Pearson in DuckDB SQL and non-linear MI
-- **Action plan** — drop / impute / encode / transform / review buckets plus a split + CV + class-imbalance recommendation
+- **Leakage detection** — flags features suspiciously predictive of the target (random-vs-time split gaps, monotonicity, post-event signals)
 - **Drift** (`biopsy compare`) — KS, Wasserstein, PSI on numerics; chi-square + JS divergence on categoricals; schema + target deltas
 
 ## Install
