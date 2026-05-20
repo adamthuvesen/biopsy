@@ -670,7 +670,7 @@ def demo(
     tmpdir = Path(tempfile.mkdtemp(prefix="biopsy-demo-"))
     csv_path = tmpdir / "demo.csv"
     write_demo_csv(csv_path, n=n)
-    console.print(f"[dim]Generated:[/dim] {csv_path}")
+    console.print(f"[dim]demo.csv[/dim]  {n:,} rows", highlight=False)
 
     prof = profile_fn(csv_path, target="churned")
     render_terminal(prof, console=console)

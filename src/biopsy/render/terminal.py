@@ -140,7 +140,7 @@ def _target_table(prof: Profile) -> Table:
     t.add_column("ρ",    justify="right")
     t.add_column("auc",  justify="right")
     t.add_column("bar",  no_wrap=True)
-    t.add_column("note", style="dim")
+    t.add_column("note", style="dim", min_width=14)
 
     for s in prof.target_signals[:15]:
         bar_width = 14
@@ -250,7 +250,7 @@ def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Tab
     t.add_column("type",              style="dim")
     t.add_column("null",              justify="right")
     t.add_column("unique",            justify="right")
-    t.add_column("distribution / top", overflow="fold")
+    t.add_column("distribution / top", overflow="fold", min_width=16)
     t.add_column("summary",           overflow="fold")
 
     columns = list(prof.columns.values()) if all_columns else _selected_columns(prof, max_columns)
