@@ -227,6 +227,10 @@ biopsy profile s3://my-bucket/events.parquet --target conversion
 biopsy profile postgres://localhost/sales?table=public.orders --target shipped
 biopsy profile bigquery://my-project/analytics.events --target conversion --sample 50000
 biopsy profile snowflake://my-acct/SALES.PUBLIC.ORDERS --target shipped --sample 50000
+biopsy compare \
+  postgres://localhost/sales?table=public.train \
+  postgres://localhost/sales?table=public.eval \
+  --target shipped
 biopsy doctor snowflake://my-acct/SALES.PUBLIC.ORDERS
 ```
 
@@ -252,6 +256,10 @@ Use a prefix for another credential set:
 
 ```bash
 biopsy profile s3://staging-bucket/events.parquet --credentials-env STAGING
+biopsy compare \
+  postgres://prod/sales?table=public.train \
+  postgres://prod/sales?table=public.eval \
+  --credentials-env STAGING
 # reads STAGING_AWS_ACCESS_KEY_ID, STAGING_AWS_SECRET_ACCESS_KEY, ...
 ```
 

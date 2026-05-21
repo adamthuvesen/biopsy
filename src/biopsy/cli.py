@@ -256,6 +256,11 @@ def compare(
     sample: int | None = typer.Option(
         None, "--sample", min=1, help="Reservoir sample N rows per side."
     ),
+    credentials_env: str | None = typer.Option(
+        None,
+        "--credentials-env",
+        help="Prefix for warehouse credential env vars. See `biopsy profile --help`.",
+    ),
     html: Path | None = typer.Option(None, "--html", help="Write a compare HTML report."),
     save: Path | None = typer.Option(None, "--save", help="Save the compare report JSON."),
     plotly_cdn: bool = typer.Option(
@@ -276,9 +281,16 @@ def compare(
     def show(side: str, msg: str) -> None:
         progress_console.print(f"[dim]biopsy compare ({side}):[/dim] {msg}")
 
+    _maybe_warn_warehouse_sample(progress_console, a, sample)
+    _maybe_warn_warehouse_sample(progress_console, b, sample)
+
     try:
-        prof_a = _load_side(a, "A", target, time_col, where, sample, show if progress else None)
-        prof_b = _load_side(b, "B", target, time_col, where, sample, show if progress else None)
+        prof_a = _load_side(
+            a, "A", target, time_col, where, sample, credentials_env, show if progress else None
+        )
+        prof_b = _load_side(
+            b, "B", target, time_col, where, sample, credentials_env, show if progress else None
+        )
     except _USER_ERRORS as exc:
         _clean_exit_on_user_error(exc)
     report = compare_profiles(prof_a, prof_b)
@@ -746,6 +758,7 @@ def _load_side(
     time_col: str | None,
     where: list[str],
     sample: int | None,
+    credentials_env: str | None,
     show: Any,
 ) -> Any:
     """Either load a saved profile JSON or profile a data file / URI in place.
@@ -779,6 +792,7 @@ def _load_side(
         time_col=time_col,
         where=where or None,
         sample=sample,
+        credentials_env=credentials_env,
         progress=cb if show else None,
     )
 

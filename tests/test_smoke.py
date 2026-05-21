@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1291,6 +1292,38 @@ def test_cli_compare_accepts_saved_profiles(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "drift" in result.output.lower()
+
+
+def test_cli_compare_passes_credentials_env_to_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_profile_fn(*args: Any, **kwargs: Any) -> Any:
+        calls.append({"args": args, "kwargs": kwargs})
+        return SimpleNamespace(source_name=f"side-{len(calls)}")
+
+    monkeypatch.setattr(cli_mod, "profile_fn", fake_profile_fn)
+    monkeypatch.setattr(cli_mod, "_print_compare", lambda *args, **kwargs: None)
+
+    import biopsy.compare as compare_mod
+
+    monkeypatch.setattr(compare_mod, "compare_profiles", lambda *_args: object())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "compare",
+            "postgres://host/db?table=public.a",
+            "postgres://host/db?table=public.b",
+            "--credentials-env",
+            "STAGING",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [call["kwargs"]["credentials_env"] for call in calls] == ["STAGING", "STAGING"]
 
 
 def test_compare_detects_numeric_shift(tmp_path: Path) -> None:
