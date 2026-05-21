@@ -1157,6 +1157,34 @@ def test_biopsy_toml_rejects_conflicting_fast_and_deep(tmp_path: Path) -> None:
     assert "fast" in msg and "deep" in msg and "conflict" in msg
 
 
+@pytest.mark.parametrize(
+    ("config_text", "expected"),
+    [
+        ("sample = 'nope'\n", "sample"),
+        ("fast = 'false'\n", "fast"),
+        ("deep = 'true'\n", "deep"),
+        ("cluster_cutoff = 2.0\n", "cluster_cutoff"),
+        ("max_cols = 1\n", "max_cols"),
+    ],
+)
+def test_biopsy_toml_rejects_invalid_value_types(
+    tmp_path: Path,
+    config_text: str,
+    expected: str,
+) -> None:
+    cfg = tmp_path / "biopsy.toml"
+    cfg.write_text(config_text)
+    csv = write_demo_csv(tmp_path / "demo.csv", n=500)
+
+    result = CliRunner().invoke(app, ["profile", str(csv), "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    msg = (result.stderr or "") + "\n" + (result.output or "")
+    if not msg.strip() and result.exception is not None:
+        msg = str(result.exception)
+    assert expected in msg
+
+
 def test_cli_doctor_runs_fast(tmp_path: Path) -> None:
     """`biopsy doctor data.csv` prints schema + candidate target/time
     columns and exits 0."""

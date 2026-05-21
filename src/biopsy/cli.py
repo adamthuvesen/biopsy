@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import tomllib
 import webbrowser
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -148,15 +149,19 @@ def profile(
     ignore_missing_exclude = _coalesce(
         ignore_missing_exclude, cfg.get("ignore_missing_exclude")
     )
-    cluster_cutoff = 0.30 if cluster_cutoff is None else float(cluster_cutoff)
-    bins = 24 if bins is None else int(bins)
-    target_sample = 30_000 if target_sample is None else int(target_sample)
-    max_cols = None if max_cols is None else int(max_cols)
-    fast = True if fast is None else bool(fast)
-    all_columns = False if all_columns is None else bool(all_columns)
-    plotly_cdn = False if plotly_cdn is None else bool(plotly_cdn)
-    ignore_missing_exclude = (
-        False if ignore_missing_exclude is None else bool(ignore_missing_exclude)
+    sample = _int_option("sample", sample, default=None, min_value=1)
+    shortlist = _int_option("shortlist", shortlist, default=None, min_value=1)
+    cluster_cutoff = _float_option(
+        "cluster_cutoff", cluster_cutoff, default=0.30, min_value=0.0, max_value=1.0
+    )
+    bins = _int_option("bins", bins, default=24, min_value=1)
+    target_sample = _int_option("target_sample", target_sample, default=30_000, min_value=100)
+    max_cols = _int_option("max_cols", max_cols, default=None, min_value=2)
+    fast = _bool_option("fast", fast, default=True)
+    all_columns = _bool_option("all_columns", all_columns, default=False)
+    plotly_cdn = _bool_option("plotly_cdn", plotly_cdn, default=False)
+    ignore_missing_exclude = _bool_option(
+        "ignore_missing_exclude", ignore_missing_exclude, default=False
     )
 
     cfg_exclude = _string_list(cfg.get("exclude"))
@@ -971,11 +976,11 @@ def _check_config_keys(cfg: dict[str, Any], path: Path, *, where: str) -> None:
 
 def _fast_from_config(cfg: dict[str, Any]) -> Any:
     """Resolve TOML `fast` / `deep` aliases into the internal fast flag."""
-    has_fast = cfg.get("fast") is not None
-    has_deep = cfg.get("deep") is not None
+    fast = _bool_config_value(cfg, "fast")
+    deep = _bool_config_value(cfg, "deep")
+    has_fast = fast is not None
+    has_deep = deep is not None
     if has_fast and has_deep:
-        fast = bool(cfg["fast"])
-        deep = bool(cfg["deep"])
         if fast == deep:
             raise typer.BadParameter(
                 "Config keys 'fast' and 'deep' conflict. Use one key, or set "
@@ -987,6 +992,61 @@ def _fast_from_config(cfg: dict[str, Any]) -> Any:
     if has_deep:
         return not bool(cfg["deep"])
     return None
+
+
+def _bool_config_value(cfg: dict[str, Any], key: str) -> bool | None:
+    value = cfg.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise typer.BadParameter(f"Config key '{key}' must be true or false.")
+    return value
+
+
+def _bool_option(name: str, value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise typer.BadParameter(f"Config key '{name}' must be true or false.")
+    return value
+
+
+def _int_option(
+    name: str,
+    value: Any,
+    *,
+    default: int | None,
+    min_value: int | None = None,
+) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise typer.BadParameter(f"Config key '{name}' must be an integer.")
+    if min_value is not None and value < min_value:
+        raise typer.BadParameter(f"Config key '{name}' must be >= {min_value}.")
+    return value
+
+
+def _float_option(
+    name: str,
+    value: Any,
+    *,
+    default: float,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise typer.BadParameter(f"Config key '{name}' must be a number.")
+    coerced = float(value)
+    if not isfinite(coerced):
+        raise typer.BadParameter(f"Config key '{name}' must be finite.")
+    if min_value is not None and coerced < min_value:
+        raise typer.BadParameter(f"Config key '{name}' must be >= {min_value}.")
+    if max_value is not None and coerced > max_value:
+        raise typer.BadParameter(f"Config key '{name}' must be <= {max_value}.")
+    return coerced
 
 
 def _coalesce(cli_value: Any, config_value: Any, *aliases: Any) -> Any:
