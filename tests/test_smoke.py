@@ -16,6 +16,7 @@ from biopsy.cli import app
 from biopsy.demo import synthetic_dataframe, write_demo_csv
 from biopsy.profile import load_profile, profile
 from biopsy.render.html import render as render_html
+from biopsy.stats import ColumnStats
 
 
 def test_profile_demo_dataset(tmp_path: Path) -> None:
@@ -298,6 +299,35 @@ def test_cli_init_and_render_saved_profile(tmp_path: Path) -> None:
     assert render_result.exit_code == 0, render_result.output
     assert report.exists()
     assert '<script src="https://cdn.plot.ly' in report.read_text()
+
+
+def test_cli_init_closes_local_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed = False
+
+    class FakeCon:
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    src = SimpleNamespace(con=FakeCon())
+    stats = {
+        "target": ColumnStats(
+            name="target", dtype="BOOLEAN", kind="bool", n=10, n_null=0, n_unique=2, null_rate=0
+        )
+    }
+    monkeypatch.setattr(cli_mod, "load", lambda *args, **kwargs: src)
+    monkeypatch.setattr(cli_mod, "compute_all", lambda *_args, **_kwargs: stats)
+
+    result = CliRunner().invoke(
+        app,
+        ["init", str(tmp_path / "input.csv"), "--output", str(tmp_path / "biopsy.toml")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert closed
 
 
 def test_profile_pandas_frame_helpers(tmp_path: Path) -> None:
@@ -1200,6 +1230,29 @@ def test_cli_doctor_runs_fast(tmp_path: Path) -> None:
     assert "Doctor" in result.output
     assert "candidates" in result.output.lower() or "candidate" in result.output.lower()
     assert elapsed < 10, f"doctor took {elapsed:.2f}s on a tiny demo"
+
+
+def test_doctor_load_closes_local_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed = False
+
+    class FakeCon:
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    src = SimpleNamespace(con=FakeCon(), source_name="demo.csv", n_rows=3)
+    monkeypatch.setattr(cli_mod, "load", lambda *args, **kwargs: src)
+    monkeypatch.setattr(cli_mod, "compute_all", lambda *_args, **_kwargs: {})
+
+    stats, source_name, n_rows, schema_only = cli_mod._doctor_load(
+        "demo.csv", sample=100, credentials_env=None
+    )
+
+    assert stats == {}
+    assert source_name == "demo.csv"
+    assert n_rows == 3
+    assert schema_only is False
+    assert closed
 
 
 def test_html_findings_groups_by_severity(tmp_path: Path) -> None:

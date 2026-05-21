@@ -641,7 +641,10 @@ def _doctor_load(
         return _doctor_stats_from_schema(schema, row_estimate, parsed.qualified)
 
     src = load(path, sample=sample, credentials_env=credentials_env)
-    return compute_all(src), src.source_name, src.n_rows, False
+    try:
+        return compute_all(src), src.source_name, src.n_rows, False
+    finally:
+        src.con.close()
 
 
 def _doctor_stats_from_schema(
@@ -720,7 +723,10 @@ def init_config(
         raise typer.BadParameter(f"{output} already exists; pass --overwrite to replace it.")
 
     src = load(path, sample=sample)
-    stats = compute_all(src)
+    try:
+        stats = compute_all(src)
+    finally:
+        src.con.close()
     if target is not None and target not in stats:
         raise typer.BadParameter(f"Target column '{target}' not found in {path}.")
     if time_col is not None and time_col not in stats:
