@@ -5,10 +5,12 @@ from __future__ import annotations
 import builtins
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
+import biopsy.cli as cli_mod
 from biopsy.cli import app
 from biopsy.demo import synthetic_dataframe, write_demo_csv
 from biopsy.profile import load_profile, profile
@@ -674,6 +676,10 @@ def test_high_cardinality_time_buckets_are_capped(tmp_path: Path) -> None:
         ({"cluster_cutoff": -0.1}, "cluster_cutoff"),
         ({"cluster_cutoff": 1.1}, "cluster_cutoff"),
         ({"shortlist_size": -1}, "shortlist_size"),
+        ({"target_sample_size": 0}, "target_sample_size"),
+        ({"bootstrap": -1}, "bootstrap"),
+        ({"pps_seeds": 0}, "pps_seeds"),
+        ({"max_cols": 1}, "max_cols"),
     ],
 )
 def test_profile_rejects_invalid_numeric_options(
@@ -1110,6 +1116,45 @@ def test_biopsy_toml_rejects_unknown_keys(tmp_path: Path) -> None:
         msg = str(result.exception)
     assert "Unknown config key" in msg or "samplee" in msg, msg
     assert "sample" in msg  # the suggestion
+
+
+def test_biopsy_toml_supports_deep_alias_and_max_cols(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "biopsy.toml"
+    cfg.write_text("target = 'churned'\ndeep = true\nmax_cols = 7\n")
+    csv = tmp_path / "demo.csv"
+    csv.write_text("x,churned\n1,0\n2,1\n")
+    seen: dict[str, Any] = {}
+
+    def fake_profile_fn(*args: Any, **kwargs: Any) -> object:
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli_mod, "profile_fn", fake_profile_fn)
+    monkeypatch.setattr(cli_mod, "render_terminal", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(app, ["profile", str(csv), "--config", str(cfg)])
+
+    assert result.exit_code == 0, result.output
+    assert seen["deep_correlations"] is True
+    assert seen["target_permutation"] is True
+    assert seen["max_cols"] == 7
+
+
+def test_biopsy_toml_rejects_conflicting_fast_and_deep(tmp_path: Path) -> None:
+    cfg = tmp_path / "biopsy.toml"
+    cfg.write_text("fast = true\ndeep = true\n")
+    csv = write_demo_csv(tmp_path / "demo.csv", n=500)
+
+    result = CliRunner().invoke(app, ["profile", str(csv), "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    msg = (result.stderr or "") + "\n" + (result.output or "")
+    if not msg.strip() and result.exception is not None:
+        msg = str(result.exception)
+    assert "fast" in msg and "deep" in msg and "conflict" in msg
 
 
 def test_cli_doctor_runs_fast(tmp_path: Path) -> None:

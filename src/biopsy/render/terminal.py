@@ -60,8 +60,12 @@ def render(
         ))
         console.print(_temporal_table(prof))
     elif prof.temporal is not None and prof.temporal.time_buckets:
+        title = (
+            "[bold]Temporal buckets[/bold] [dim]→[/dim] "
+            f"[yellow]{prof.temporal.time_column}[/yellow]"
+        )
         console.print(Rule(
-            f"[bold]Temporal buckets[/bold] [dim]→[/dim] [yellow]{prof.temporal.time_column}[/yellow]",
+            title,
             style="bright_black",
         ))
         console.print(_temporal_buckets_table(prof))
@@ -70,8 +74,12 @@ def render(
         n_short = len(prof.clusters.shortlist)
         n_clust = len(prof.clusters.clusters)
         cutoff = f"|ρ|≥{1 - prof.clusters.cutoff:.2f}"
+        title = (
+            "[bold]Feature shortlist[/bold] "
+            f"[dim]· {n_short} of {n_clust} clusters ({cutoff})[/dim]"
+        )
         console.print(Rule(
-            f"[bold]Feature shortlist[/bold] [dim]· {n_short} of {n_clust} clusters ({cutoff})[/dim]",
+            title,
             style="bright_black",
         ))
         console.print(_shortlist_table(prof))
@@ -189,7 +197,9 @@ def _temporal_table(prof: Profile) -> Table:
             split = "—"
         drift = f"{s.drift_ks:.2f}" if s.drift_ks is not None else "—"
         mono  = f"{s.time_monotonicity:.2f}" if s.time_monotonicity is not None else "—"
-        sev_color = {"critical": "red", "warning": "yellow", "info": "cyan"}.get(s.severity, "white")
+        sev_color = {"critical": "red", "warning": "yellow", "info": "cyan"}.get(
+            s.severity, "white"
+        )
         t.add_row(s.feature, split, drift, mono, f"[{sev_color}]{s.reason}[/]")
     return t
 
@@ -238,7 +248,14 @@ def _shortlist_table(prof: Profile) -> Table:
         if entry.is_weak:
             feat = f"[yellow]{feat}[/yellow]"
             score_str = f"[yellow]{score_str}[/yellow]"
-        t.add_row(str(i), feat, f"c{entry.cluster_id}", str(entry.cluster_size), score_str, entry.score_method)
+        t.add_row(
+            str(i),
+            feat,
+            f"c{entry.cluster_id}",
+            str(entry.cluster_size),
+            score_str,
+            entry.score_method,
+        )
     return t
 
 

@@ -456,6 +456,10 @@ def profile(
         hist_bins=hist_bins,
         cluster_cutoff=cluster_cutoff,
         shortlist_size=shortlist_size,
+        target_sample_size=target_sample_size,
+        bootstrap=bootstrap,
+        pps_seeds=pps_seeds,
+        max_cols=max_cols,
     )
     t0 = time.perf_counter()
     _progress(progress, "Loading data")
@@ -590,6 +594,10 @@ def _validate_options(
     hist_bins: int,
     cluster_cutoff: float,
     shortlist_size: int | None,
+    target_sample_size: int,
+    bootstrap: int,
+    pps_seeds: int,
+    max_cols: int | None,
 ) -> None:
     if sample is not None and sample < 1:
         raise ValueError("sample must be >= 1 when provided.")
@@ -599,6 +607,14 @@ def _validate_options(
         raise ValueError("cluster_cutoff must be between 0 and 1.")
     if shortlist_size is not None and shortlist_size < 1:
         raise ValueError("shortlist_size must be >= 1 when provided.")
+    if target_sample_size < 1:
+        raise ValueError("target_sample_size must be >= 1.")
+    if bootstrap < 0:
+        raise ValueError("bootstrap must be >= 0.")
+    if pps_seeds < 1:
+        raise ValueError("pps_seeds must be >= 1.")
+    if max_cols is not None and max_cols < 2:
+        raise ValueError("max_cols must be >= 2 when provided.")
 
 
 def _progress(callback: ProgressCallback | None, message: str) -> None:

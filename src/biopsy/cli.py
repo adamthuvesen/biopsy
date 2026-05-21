@@ -141,7 +141,8 @@ def profile(
     sample = _coalesce(sample, cfg.get("sample"))
     bins = _coalesce(bins, cfg.get("bins"))
     target_sample = _coalesce(target_sample, cfg.get("target_sample"))
-    fast = _coalesce(fast, cfg.get("fast"))
+    fast = _coalesce(fast, _fast_from_config(cfg))
+    max_cols = _coalesce(max_cols, cfg.get("max_cols"))
     all_columns = _coalesce(all_columns, cfg.get("all_columns"))
     plotly_cdn = _coalesce(plotly_cdn, cfg.get("plotly_cdn"))
     ignore_missing_exclude = _coalesce(
@@ -150,6 +151,7 @@ def profile(
     cluster_cutoff = 0.30 if cluster_cutoff is None else float(cluster_cutoff)
     bins = 24 if bins is None else int(bins)
     target_sample = 30_000 if target_sample is None else int(target_sample)
+    max_cols = None if max_cols is None else int(max_cols)
     fast = True if fast is None else bool(fast)
     all_columns = False if all_columns is None else bool(all_columns)
     plotly_cdn = False if plotly_cdn is None else bool(plotly_cdn)
@@ -424,7 +426,8 @@ def _starter_notebook(
         md_cell("## Baseline model on the shortlist"),
         code_cell(
             "# `build_preprocessor` is defined by the cell above (biopsy codegen).\n"
-            "assert 'build_preprocessor' in dir(), \"Pipeline cell did not define build_preprocessor()\"\n"
+            "assert 'build_preprocessor' in dir(), "
+            "\"Pipeline cell did not define build_preprocessor()\"\n"
             "preproc = build_preprocessor()\n"
             "pipe = Pipeline([\n"
             "    ('preprocess', preproc),\n"
@@ -920,7 +923,7 @@ def _print_diff(console: Console, d: Any) -> None:
 _CONFIG_KNOWN_KEYS: frozenset[str] = frozenset({
     "target", "time", "time_col", "exclude", "exclude_file", "ignore_missing_exclude",
     "filter", "where", "sample", "target_sample", "shortlist", "cluster_cutoff",
-    "html", "save", "plotly_cdn", "fast", "deep", "all_columns", "bins",
+    "html", "save", "plotly_cdn", "fast", "deep", "all_columns", "bins", "max_cols",
 })
 
 
@@ -964,6 +967,26 @@ def _check_config_keys(cfg: dict[str, Any], path: Path, *, where: str) -> None:
     raise typer.BadParameter(
         f"Unknown config key(s) in {path} {where}: {', '.join(suggestions)}."
     )
+
+
+def _fast_from_config(cfg: dict[str, Any]) -> Any:
+    """Resolve TOML `fast` / `deep` aliases into the internal fast flag."""
+    has_fast = cfg.get("fast") is not None
+    has_deep = cfg.get("deep") is not None
+    if has_fast and has_deep:
+        fast = bool(cfg["fast"])
+        deep = bool(cfg["deep"])
+        if fast == deep:
+            raise typer.BadParameter(
+                "Config keys 'fast' and 'deep' conflict. Use one key, or set "
+                "`fast = false` with `deep = true`."
+            )
+        return fast
+    if has_fast:
+        return cfg["fast"]
+    if has_deep:
+        return not bool(cfg["deep"])
+    return None
 
 
 def _coalesce(cli_value: Any, config_value: Any, *aliases: Any) -> Any:

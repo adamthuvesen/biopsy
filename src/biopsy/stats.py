@@ -10,7 +10,6 @@ import numpy as np
 from biopsy.io import Source, kind_of
 from biopsy.io import _quote_ident as _quote
 
-
 _NUMERIC_TYPES: tuple[type, ...] = (int, float, np.integer, np.floating)
 
 

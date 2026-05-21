@@ -119,7 +119,9 @@ def _ensure_template() -> None:
 
 # --- chart builders --------------------------------------------------------
 
-def _hist_unpack(histogram: list[tuple[float, float, int]]) -> tuple[list[float], list[float], list[int]]:
+def _hist_unpack(
+    histogram: list[tuple[float, float, int]],
+) -> tuple[list[float], list[float], list[int]]:
     centers = [(lo + hi) / 2 for lo, hi, _ in histogram]
     widths = [hi - lo for lo, hi, _ in histogram]
     counts = [c for *_b, c in histogram]

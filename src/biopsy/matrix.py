@@ -69,9 +69,13 @@ class SampleCache:
             missing = [c for c in columns if c not in self._columns]
             if missing:
                 quoted_missing = ", ".join(_quote(c) for c in missing)
+                sample_sql = (
+                    f"SELECT {quoted_missing} FROM data "
+                    f"USING SAMPLE {max_rows} ROWS (reservoir, 42)"
+                )
                 new_block = _fetch_object_array(
                     self.src.con,
-                    f"SELECT {quoted_missing} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+                    sample_sql,
                     missing,
                 )
                 if new_block.shape[0] == self._raw.shape[0]:
