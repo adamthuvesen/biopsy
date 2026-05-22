@@ -472,121 +472,121 @@ def profile(
         source_name=source_name,
         credentials_env=credentials_env,
     )
+    target_src: Source | None = None
+    try:
+        if target is not None and target not in src.columns:
+            raise ValueError(
+                f"Target column '{target}' not in dataset. Available: {src.columns}"
+            )
 
-    if target is not None and target not in src.columns:
-        src.con.close()
-        raise ValueError(
-            f"Target column '{target}' not in dataset. Available: {src.columns}"
+        _progress(progress, "Computing column statistics")
+        stats = compute_all(src, hist_bins=hist_bins)
+        sample_cache = SampleCache(src)
+        # If max_cols is set, we want to prioritize columns ranked by target
+        # signal. Compute the lightweight univariate ranking first when a target
+        # is supplied; otherwise fall back to dtype ordering.
+        priority_features: list[str] | None = None
+        if max_cols is not None and target is not None and deep_correlations:
+            _progress(progress, "Pre-ranking columns for pairwise pass")
+            priority_features = _univariate_priority(src, stats, target)
+
+        _progress(progress, "Computing correlations")
+        corrs = correlation_pairs(
+            src,
+            stats,
+            include_mutual_info=deep_correlations,
+            sample_cache=sample_cache,
+            max_cols=max_cols,
+            priority_features=priority_features,
         )
 
-    _progress(progress, "Computing column statistics")
-    stats = compute_all(src, hist_bins=hist_bins)
-    sample_cache = SampleCache(src)
-    # If max_cols is set, we want to prioritize columns ranked by target
-    # signal. Compute the lightweight univariate ranking first when a target
-    # is supplied; otherwise fall back to dtype ordering.
-    priority_features: list[str] | None = None
-    if max_cols is not None and target is not None and deep_correlations:
-        _progress(progress, "Pre-ranking columns for pairwise pass")
-        priority_features = _univariate_priority(src, stats, target)
+        target_sigs: list[TargetSignal] = []
+        target_summary = None
+        target_src = src
+        if target:
+            target_src, target_stats = _target_source_and_stats(
+                data=data,
+                src=src,
+                stats=stats,
+                target=target,
+                sample=sample,
+                hist_bins=hist_bins,
+                exclude=exclude,
+                ignore_missing_exclude=ignore_missing_exclude,
+                where=where,
+                source_name=source_name,
+            )
+            target_summary = _target_summary(target_src, target_stats[target])
+            _progress(progress, "Computing target signal")
+            target_sigs = target_signal(
+                target_src,
+                target_stats,
+                target,
+                max_rows=target_sample_size,
+                include_permutation=target_permutation,
+                stratify=stratify_target,
+                bootstrap=bootstrap,
+                pps_seeds=pps_seeds,
+            )
 
-    _progress(progress, "Computing correlations")
-    corrs = correlation_pairs(
-        src,
-        stats,
-        include_mutual_info=deep_correlations,
-        sample_cache=sample_cache,
-        max_cols=max_cols,
-        priority_features=priority_features,
-    )
+        resolved_time, time_info = resolve_time_column(stats, time_col)
+        temporal_report = None
+        if resolved_time is not None:
+            _progress(progress, "Computing temporal checks")
+            temporal_report = temporal_signals(src, stats, resolved_time, target=target)
 
-    target_sigs: list[TargetSignal] = []
-    target_summary = None
-    target_src = src
-    if target:
-        target_src, target_stats = _target_source_and_stats(
-            data=data,
-            src=src,
-            stats=stats,
+        _progress(progress, "Clustering redundant features")
+        clusters_report = cluster_features(
+            src, stats,
             target=target,
-            sample=sample,
-            hist_bins=hist_bins,
-            exclude=exclude,
-            ignore_missing_exclude=ignore_missing_exclude,
-            where=where,
-            source_name=source_name,
-        )
-        target_summary = _target_summary(target_src, target_stats[target])
-        _progress(progress, "Computing target signal")
-        target_sigs = target_signal(
-            target_src,
-            target_stats,
-            target,
-            max_rows=target_sample_size,
-            include_permutation=target_permutation,
-            stratify=stratify_target,
-            bootstrap=bootstrap,
-            pps_seeds=pps_seeds,
+            target_signals=target_sigs if target else None,
+            cutoff=cluster_cutoff,
+            max_shortlist=shortlist_size,
+            sample_cache=sample_cache,
         )
 
-    resolved_time, time_info = resolve_time_column(stats, time_col)
-    temporal_report = None
-    if resolved_time is not None:
-        _progress(progress, "Computing temporal checks")
-        temporal_report = temporal_signals(src, stats, resolved_time, target=target)
+        _progress(progress, "Ranking findings")
+        findings = column_findings(stats, src.n_rows, target=target)
+        findings += correlation_findings(corrs)
+        if target_summary:
+            findings += target_summary_findings(target_summary)
+        if target:
+            findings += target_findings(target_sigs, target)
+        findings += temporal_findings(temporal_report, target)
 
-    _progress(progress, "Clustering redundant features")
-    clusters_report = cluster_features(
-        src, stats,
-        target=target,
-        target_signals=target_sigs if target else None,
-        cutoff=cluster_cutoff,
-        max_shortlist=shortlist_size,
-        sample_cache=sample_cache,
-    )
+        if time_info is not None and resolved_time is None:
+            findings.append(Finding(
+                severity="info",
+                category="temporal",
+                title="Temporal analysis skipped",
+                detail=time_info,
+                columns=[],
+                score=0.0,
+            ))
 
-    _progress(progress, "Ranking findings")
-    findings = column_findings(stats, src.n_rows, target=target)
-    findings += correlation_findings(corrs)
-    if target_summary:
-        findings += target_summary_findings(target_summary)
-    if target:
-        findings += target_findings(target_sigs, target)
-    findings += temporal_findings(temporal_report, target)
+        findings = rank(findings)
 
-    if time_info is not None and resolved_time is None:
-        findings.append(Finding(
-            severity="info",
-            category="temporal",
-            title="Temporal analysis skipped",
-            detail=time_info,
-            columns=[],
-            score=0.0,
-        ))
-
-    findings = rank(findings)
-
-    prof = Profile(
-        source_name=src.source_name,
-        source_path=src.source_path,
-        n_rows=src.n_rows,
-        n_cols=src.n_cols,
-        elapsed_seconds=time.perf_counter() - t0,
-        target=target,
-        time_column=resolved_time,
-        target_summary=target_summary,
-        columns=stats,
-        correlations=corrs,
-        target_signals=target_sigs,
-        temporal=temporal_report,
-        clusters=clusters_report,
-        findings=findings,
-        source_uri=src.source_uri,
-    )
-    if target_src.con is not src.con:
-        target_src.con.close()
-    src.con.close()
-    return prof
+        return Profile(
+            source_name=src.source_name,
+            source_path=src.source_path,
+            n_rows=src.n_rows,
+            n_cols=src.n_cols,
+            elapsed_seconds=time.perf_counter() - t0,
+            target=target,
+            time_column=resolved_time,
+            target_summary=target_summary,
+            columns=stats,
+            correlations=corrs,
+            target_signals=target_sigs,
+            temporal=temporal_report,
+            clusters=clusters_report,
+            findings=findings,
+            source_uri=src.source_uri,
+        )
+    finally:
+        if target_src is not None and target_src.con is not src.con:
+            target_src.con.close()
+        src.con.close()
 
 
 def _validate_options(

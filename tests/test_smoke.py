@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -720,6 +721,69 @@ def test_profile_rejects_invalid_numeric_options(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         profile(tmp_path / "missing.csv", **kwargs)
+
+
+def test_profile_closes_source_when_stats_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_mod = importlib.import_module("biopsy.profile")
+    closed = False
+
+    class FakeCon:
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    src = SimpleNamespace(con=FakeCon(), columns=["x"])
+    monkeypatch.setattr(profile_mod, "load", lambda *args, **kwargs: src)
+
+    def fail_compute_all(*_args: Any, **_kwargs: Any) -> dict[str, ColumnStats]:
+        raise RuntimeError("stats failed")
+
+    monkeypatch.setattr(profile_mod, "compute_all", fail_compute_all)
+
+    with pytest.raises(RuntimeError, match="stats failed"):
+        profile_mod.profile("data.csv")
+
+    assert closed
+
+
+def test_profile_closes_target_source_when_target_signal_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_mod = importlib.import_module("biopsy.profile")
+    closed: list[str] = []
+
+    class FakeCon:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            closed.append(self.name)
+
+    src = SimpleNamespace(con=FakeCon("main"), columns=["x", "y"])
+    target_src = SimpleNamespace(con=FakeCon("target"), columns=["x", "y"])
+    stats = {
+        "x": ColumnStats("x", "INTEGER", "numeric", 10, 0, 10, 0.0),
+        "y": ColumnStats("y", "BOOLEAN", "bool", 10, 0, 2, 0.0),
+    }
+    monkeypatch.setattr(profile_mod, "load", lambda *args, **kwargs: src)
+    monkeypatch.setattr(profile_mod, "compute_all", lambda *_args, **_kwargs: stats)
+    monkeypatch.setattr(profile_mod, "correlation_pairs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        profile_mod,
+        "_target_source_and_stats",
+        lambda **_kwargs: (target_src, stats),
+    )
+    monkeypatch.setattr(profile_mod, "_target_summary", lambda *_args, **_kwargs: None)
+
+    def fail_target_signal(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise RuntimeError("target signal failed")
+
+    monkeypatch.setattr(profile_mod, "target_signal", fail_target_signal)
+
+    with pytest.raises(RuntimeError, match="target signal failed"):
+        profile_mod.profile("data.csv", target="y", sample=10)
+
+    assert closed == ["target", "main"]
 
 
 def test_regression_diff_target_drift_surfaces(tmp_path: Path) -> None:
