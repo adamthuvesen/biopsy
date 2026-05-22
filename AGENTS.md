@@ -58,7 +58,7 @@ tests/
 
 7. **Target drift kinds** (`temporal._target_drift`) — four kinds: `binary`, `multiclass`, `regression_ratio`, `regression_diff`. `is_target_drifted()` and the renderers in `findings.py` must handle all four.
 
-8. **Post-event leakage detection** (`temporal._classify`) — branches on `random_pps >= 0.6` (existing critical leakage) and `random_pps >= 0.30 AND time_pps < 0.05 AND drift_ks >= 0.15` (post-event). Both produce reasons containing "future information", which `findings.temporal_findings` reclassifies as `category="leakage"` instead of `"temporal"`.
+8. **Temporal leakage classification** (`temporal._classify`) — sets `TemporalSignal.leakage_kind` (`random_cv`, `post_event`, `drift`, `strong_drift`, `monotonic`, or `none`). `findings.temporal_findings` maps `random_cv` and `post_event` to `category="leakage"`. Saved profiles without `leakage_kind` are back-filled via `temporal.infer_leakage_kind_from_legacy` in `temporal_signal_from_payload`.
 
 9. **Action plan single-source-of-truth** (`action_plan.py`) — HTML, terminal, and `to_sklearn_pipeline_code()` all consume `Profile.action_plan()`. Don't duplicate the drop/impute/encode/transform logic anywhere else.
 

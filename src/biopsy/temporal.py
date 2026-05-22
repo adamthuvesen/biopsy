@@ -12,6 +12,7 @@ When a dataset has a time column, profile features for:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 from scipy.stats import ks_2samp
@@ -21,11 +22,25 @@ from biopsy.correlations import _spearman, _valid_mask, pps
 from biopsy.io import Source
 from biopsy.matrix import _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
+from biopsy.targets import target_task_kind
 
 # --- thresholds (single source of truth) ----------------------------------
 
 LEAK_GAP_THRESHOLD = 0.25          # random_pps − time_pps must exceed this
 LEAK_MIN_RANDOM_PPS = 0.35         # only flag if the feature is actually predictive
+POST_EVENT_MIN_RANDOM_PPS = 0.30
+POST_EVENT_MAX_TIME_PPS = 0.05
+POST_EVENT_MIN_GAP = 0.25
+POST_EVENT_MIN_DRIFT_KS = 0.15
+
+LeakageKind = Literal[
+    "none",
+    "random_cv",
+    "post_event",
+    "drift",
+    "strong_drift",
+    "monotonic",
+]
 DRIFT_KS_THRESHOLD = 0.3
 DRIFT_MIN_PPS = 0.1
 STRONG_DRIFT_KS = 0.5              # flag drift at info level even without PPS signal
@@ -51,6 +66,7 @@ class TemporalSignal:
     time_monotonicity: float | None
     severity: str           # "critical" | "warning" | "info" | "none"
     reason: str             # human-readable
+    leakage_kind: LeakageKind = "none"
 
     @property
     def leak_gap(self) -> float | None:
@@ -151,7 +167,7 @@ def temporal_signals(
     # Determine target kind early so we can pull the target alongside features.
     target_kind: str | None = None
     if target and target in stats:
-        target_kind = _target_kind(stats[target])
+        target_kind = target_task_kind(stats[target])
 
     # Pick the feature set — same eligibility as target_signal.
     features = [
@@ -375,7 +391,7 @@ def _analyze_feature(
                 split=(rand_train, rand_test),
             )
 
-    severity, reason = _classify(
+    severity, reason, leakage_kind = _classify(
         random_pps=random_pps,
         time_pps=time_pps,
         drift_ks=drift_ks,
@@ -392,6 +408,7 @@ def _analyze_feature(
         time_monotonicity=time_monotonicity,
         severity=severity,
         reason=reason,
+        leakage_kind=leakage_kind,
     )
 
 
@@ -402,7 +419,7 @@ def _classify(
     time_monotonicity: float | None,
     n_unique: int,
     n_nonnull: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, LeakageKind]:
     # Leakage: predictive power collapses on time-ordered eval
     if (
         random_pps is not None and time_pps is not None
@@ -412,24 +429,24 @@ def _classify(
         return "critical", (
             f"Predicts target on random CV ({random_pps:.2f}) but fails on "
             f"time-ordered split ({time_pps:.2f}). Likely contains future information."
-        )
+        ), "random_cv"
 
     # Post-event leakage: target signal is present in only part of the time
     # range. Lower random_pps threshold catches features that pop in late, are
     # computed from future events, and don't generalize across time.
     if (
         random_pps is not None and time_pps is not None
-        and random_pps >= 0.30
-        and time_pps < 0.05
-        and (random_pps - time_pps) >= 0.25
-        and drift_ks is not None and drift_ks >= 0.15
+        and random_pps >= POST_EVENT_MIN_RANDOM_PPS
+        and time_pps < POST_EVENT_MAX_TIME_PPS
+        and (random_pps - time_pps) >= POST_EVENT_MIN_GAP
+        and drift_ks is not None and drift_ks >= POST_EVENT_MIN_DRIFT_KS
     ):
         return "critical", (
             f"Random-CV predictive signal ({random_pps:.2f}) but time-ordered "
             f"split scores near zero ({time_pps:.2f}) with strong drift "
             f"(KS={drift_ks:.2f}). Likely contains future information from "
             "post-event values."
-        )
+        ), "post_event"
 
     # Drift + non-trivial predictive signal
     if (
@@ -439,7 +456,7 @@ def _classify(
         return "warning", (
             f"Distribution shifts over time (KS={drift_ks:.2f}) on a predictive feature. "
             "Production model may degrade."
-        )
+        ), "drift"
 
     # Strong drift without a PPS signal — common for regression targets where
     # individual features score near-zero PPS but still shift seasonally/temporally.
@@ -447,7 +464,7 @@ def _classify(
         return "info", (
             f"Distribution shifts significantly over time (KS={drift_ks:.2f}). "
             "May indicate seasonal patterns or concept drift."
-        )
+        ), "strong_drift"
 
     # Time-monotonic + unique-per-row
     if (
@@ -457,9 +474,50 @@ def _classify(
         return "warning", (
             f"Strictly increases/decreases with time (Spearman={time_monotonicity:.2f}) "
             "and is unique-per-row — likely a row counter or ingest timestamp."
-        )
+        ), "monotonic"
 
-    return "none", ""
+    return "none", "", "none"
+
+
+def infer_leakage_kind_from_legacy(
+    severity: str,
+    reason: str,
+) -> LeakageKind:
+    """Back-fill `leakage_kind` for saved profiles emitted before the field existed."""
+    if severity != "critical":
+        if severity == "warning" and "Distribution shifts over time" in reason:
+            return "drift"
+        if severity == "warning" and "unique-per-row" in reason:
+            return "monotonic"
+        if severity == "info" and "Distribution shifts significantly" in reason:
+            return "strong_drift"
+        return "none"
+    reason_l = reason.lower()
+    if "post-event" in reason_l:
+        return "post_event"
+    if "future information" in reason_l:
+        return "random_cv"
+    return "none"
+
+
+def temporal_signal_from_payload(payload: dict) -> TemporalSignal:
+    """Build a signal from JSON, inferring `leakage_kind` when absent."""
+    leakage_kind = payload.get("leakage_kind")
+    if leakage_kind is None:
+        leakage_kind = infer_leakage_kind_from_legacy(
+            str(payload.get("severity", "none")),
+            str(payload.get("reason", "")),
+        )
+    return TemporalSignal(
+        feature=str(payload["feature"]),
+        time_pps=payload.get("time_pps"),
+        random_pps=payload.get("random_pps"),
+        drift_ks=payload.get("drift_ks"),
+        time_monotonicity=payload.get("time_monotonicity"),
+        severity=str(payload.get("severity", "none")),
+        reason=str(payload.get("reason", "")),
+        leakage_kind=leakage_kind,
+    )
 
 
 def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
@@ -563,7 +621,7 @@ def _time_bucket_summary(
 
     t_stats = stats[target]
     qtarget = _quote(target)
-    target_kind = _target_kind(t_stats)
+    target_kind = target_task_kind(t_stats)
     if target_kind == "classification":
         # Pick the minority class as "positive" — that's the rare event whose
         # drift matters. Lexicographic ORDER BY 1 DESC happens to pick the
@@ -659,22 +717,13 @@ def _time_bucket_summary(
     ]
 
 
-def _target_kind(stats: ColumnStats) -> str:
-    return (
-        "classification" if (
-            stats.kind in {"text", "bool"} or
-            (stats.kind == "numeric" and stats.n_unique <= 20)
-        ) else "regression"
-    )
-
-
 def _target_drift_from_buckets(
     buckets: list[TimeBucket],
     target_stats: ColumnStats | None,
 ) -> tuple[float | None, str | None, float | None]:
     if target_stats is None or len(buckets) < 2:
         return None, None, None
-    kind = _target_kind(target_stats)
+    kind = target_task_kind(target_stats)
     if kind == "classification":
         rates = [b.target_rate for b in buckets if b.target_rate is not None]
         if len(rates) < 2:

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from biopsy.correlations import CorrelationPair, TargetSignal
+from biopsy.inference import looks_like_id
 from biopsy.stats import ColumnStats
+from biopsy.targets import TargetSummary
 from biopsy.temporal import TemporalReport, TemporalSignal, is_target_drifted
 
 
@@ -116,21 +119,6 @@ def _values_are_bool_like(stats: ColumnStats) -> bool:
     return True
 
 
-def _looks_like_id(name: str) -> bool:
-    """Heuristic: column name signals an identifier.
-
-    Match structural patterns only — `_id` suffix, exact `id` / `ID`, or
-    `uuid` substring. Avoid bare `endswith("id")` because words like `paid`,
-    `liquid`, `grid`, `valid` end with "id" without being IDs.
-    """
-    n = name.lower()
-    if n == "id":
-        return True
-    if n.endswith("_id"):
-        return True
-    return "uuid" in n
-
-
 def column_findings(
     stats: dict[str, ColumnStats],
     n_rows: int,
@@ -196,7 +184,7 @@ def column_findings(
             ))
 
         # ID-shaped feature (high cardinality + ID-ish name)
-        if s.n_unique == s.n - s.n_null and s.n_unique > 50 and _looks_like_id(s.name):
+        if s.n_unique == s.n - s.n_null and s.n_unique > 50 and looks_like_id(s.name):
             out.append(Finding(
                 severity="warning", category="suspicious", kind="identifier_shape",
                 title=f"`{s.name}` looks like an identifier",
@@ -333,7 +321,16 @@ def column_findings(
     return out
 
 
-def target_summary_findings(summary: Any) -> list[Finding]:
+def severity_counts(findings: Iterable[Finding]) -> dict[str, int]:
+    """Count findings by severity tier (critical / warning / info)."""
+    counts = {"critical": 0, "warning": 0, "info": 0}
+    for f in findings:
+        if f.severity in counts:
+            counts[f.severity] += 1
+    return counts
+
+
+def target_summary_findings(summary: TargetSummary) -> list[Finding]:
     out: list[Finding] = []
     if summary.kind == "classification":
         if summary.n_unique <= 1:
@@ -479,11 +476,9 @@ def temporal_findings(report: TemporalReport | None, target: str | None) -> list
         if sig.severity == "none":
             continue
         score = sig.leak_gap or sig.drift_ks or sig.time_monotonicity or 0.0
-        # "Future-information" leakage: random PPS holds but the time split
-        # collapses. Reason string from `_classify()` carries that signature.
-        is_post_event = sig.severity == "critical" and "future information" in (sig.reason or "")
-        category = "leakage" if is_post_event else "temporal"
-        kind = "temporal_leak" if is_post_event else _temporal_kind(sig)
+        is_leakage = sig.leakage_kind in {"random_cv", "post_event"}
+        category = "leakage" if is_leakage else "temporal"
+        kind = "temporal_leak" if is_leakage else _temporal_kind(sig)
         out.append(Finding(
             severity=sig.severity,
             category=category,
