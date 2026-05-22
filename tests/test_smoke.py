@@ -1195,6 +1195,59 @@ def test_notebook_starter_writes_valid_json(tmp_path: Path) -> None:
         "".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code"
     )
     assert "build_preprocessor" in sources
+    assert "TARGET_KIND = 'classification'" in sources
+    assert "GradientBoostingClassifier" in sources
+
+
+def test_notebook_starter_uses_regression_baseline(tmp_path: Path) -> None:
+    import csv as csv_module
+    import json as _json
+
+    csv = tmp_path / "regression.csv"
+    with csv.open("w", newline="") as f:
+        w = csv_module.writer(f)
+        w.writerow(["x", "y"])
+        for i in range(300):
+            w.writerow([i, i * 0.5 + 1])
+
+    out = tmp_path / "starter.ipynb"
+    result = CliRunner().invoke(
+        app, ["notebook", str(out), "--file", str(csv), "--target", "y"]
+    )
+
+    assert result.exit_code == 0, result.output
+    nb = _json.loads(out.read_text())
+    sources = "".join(
+        "".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code"
+    )
+    assert "TARGET_KIND = 'regression'" in sources
+    assert "GradientBoostingRegressor" in sources
+    assert "mean_absolute_error" in sources
+    assert "stratify=y" not in sources
+
+
+def test_notebook_starter_without_target_skips_supervised_model(tmp_path: Path) -> None:
+    import json as _json
+
+    notebook_json = cli_mod._starter_notebook(
+        data_file=tmp_path / "data.csv",
+        target=None,
+        target_kind=None,
+        time_col=None,
+        pipeline_code="def build_preprocessor():\n    raise NotImplementedError\n",
+        shortlist=[],
+        split_detail="Random 80/20 holdout",
+        cv_detail="KFold(n_splits=5)",
+        class_detail=None,
+    )
+
+    nb = _json.loads(notebook_json)
+    sources = "".join(
+        "".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code"
+    )
+    assert "TARGET_KIND = None" in sources
+    assert "GradientBoosting" not in sources
+    assert "fit_transform(X)" in sources
 
 
 def test_biopsy_toml_rejects_unknown_keys(tmp_path: Path) -> None:
