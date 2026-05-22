@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import tomllib
 import webbrowser
@@ -824,16 +825,16 @@ def _load_side(
 ) -> Any:
     """Either load a saved profile JSON or profile a data file / URI in place.
 
-    Accepts file paths, warehouse URIs, and saved profile JSONs. JSON
-    detection is by suffix; URIs and paths flow through to `profile_fn`,
-    which handles dispatch.
+    Accepts file paths, warehouse URIs, and saved profile JSONs. Local JSON
+    files are treated as saved profiles only when they have biopsy's profile
+    artifact shape; other JSON files flow through to `profile_fn` as data.
     """
     text = str(path)
     is_uri = "://" in text
     # Saved profiles are local files with .json suffix. Don't treat a
     # warehouse URI ending in .json (e.g. s3://bucket/x.json) as a saved
     # profile.
-    if not is_uri and text.lower().endswith(".json"):
+    if not is_uri and text.lower().endswith(".json") and _looks_like_profile_json(Path(text)):
         display = Path(text).name
         if show:
             show(label, f"loading profile {display}")
@@ -856,6 +857,17 @@ def _load_side(
         credentials_env=credentials_env,
         progress=cb if show else None,
     )
+
+
+def _looks_like_profile_json(path: Path) -> bool:
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    required = {"source_name", "n_rows", "n_cols", "columns", "findings"}
+    return required.issubset(payload)
 
 
 def _print_compare(console: Console, report: Any) -> None:

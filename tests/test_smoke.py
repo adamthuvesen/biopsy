@@ -1464,6 +1464,24 @@ def test_cli_compare_accepts_saved_profiles(tmp_path: Path) -> None:
     assert "drift" in result.output.lower()
 
 
+def test_cli_compare_accepts_json_data_files(tmp_path: Path) -> None:
+    a_json = tmp_path / "a.json"
+    b_json = tmp_path / "b.json"
+    a_rows = [{"x": i, "segment": "A" if i % 2 else "B"} for i in range(200)]
+    b_rows = [{"x": i + 50, "segment": "A" if i % 2 else "B"} for i in range(200)]
+    a_json.write_text(json.dumps(a_rows), encoding="utf-8")
+    b_json.write_text(json.dumps(b_rows), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["compare", str(a_json), str(b_json), "--no-progress"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "drift" in result.output.lower()
+    assert "x" in result.output
+
+
 def test_cli_compare_passes_credentials_env_to_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
