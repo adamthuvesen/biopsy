@@ -578,6 +578,33 @@ def test_h2_spearman_handles_ties() -> None:
     assert rho is not None and rho > 0.99, f"monotone input gave rho={rho}"
 
 
+def test_valid_mask_does_not_require_pandas() -> None:
+    import numpy as np
+
+    from biopsy.correlations import _valid_mask
+
+    values = np.array(
+        [1.0, None, float("nan"), np.float64("nan"), np.datetime64("NaT"), "ok"],
+        dtype=object,
+    )
+
+    assert _valid_mask(values).tolist() == [True, False, False, False, False, True]
+
+
+def test_time_to_float_does_not_require_pandas() -> None:
+    import numpy as np
+
+    from biopsy.temporal import _time_to_float
+
+    values = np.array(["2024-01-01", np.datetime64("2024-01-02"), None, "not-a-date"], dtype=object)
+    out = _time_to_float(values)
+
+    assert np.isfinite(out[:2]).all()
+    assert out[1] > out[0]
+    assert np.isnan(out[2])
+    assert np.isnan(out[3])
+
+
 def test_split_pps_baseline_uses_train_and_test_indices() -> None:
     """Holdout PPS must ignore invalid rows outside the supplied split."""
     import numpy as np

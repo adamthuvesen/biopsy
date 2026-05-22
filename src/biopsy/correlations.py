@@ -89,12 +89,26 @@ def pearson_matrix(
 
 def _valid_mask(values: np.ndarray) -> np.ndarray:
     """Boolean mask of non-null entries in an object/numeric array."""
-    # pandas.isna handles None, float NaN, NaT, and pd.NA uniformly across
-    # object/numeric/datetime arrays. ~5–20× faster than the per-row loop
-    # for the 10k–50k samples typical here.
-    import pandas as pd
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.floating):
+        return ~np.isnan(arr)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return ~np.isnat(arr)
+    if arr.dtype != object:
+        return np.ones(arr.shape, dtype=bool)
+    return np.asarray([_is_valid_value(v) for v in arr], dtype=bool)
 
-    return ~np.asarray(pd.isna(values), dtype=bool)
+
+def _is_valid_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float):
+        return not np.isnan(value)
+    if isinstance(value, np.floating):
+        return not bool(np.isnan(value))
+    if isinstance(value, np.datetime64):
+        return not bool(np.isnat(value))
+    return True
 
 
 def _encode(values: np.ndarray, kind: str) -> tuple[np.ndarray, bool]:

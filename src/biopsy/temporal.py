@@ -479,24 +479,14 @@ def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
 
 def _time_to_float(values: np.ndarray) -> np.ndarray:
     """Convert temporal values to a float scalar suitable for ranking."""
-    # Try the vectorized path first: pandas understands native datetimes,
-    # numpy datetime64, and string ISO timestamps in one pass. Anything that
-    # fails to parse falls through to a per-row fallback.
-    import pandas as pd
-
-    try:
-        parsed = pd.to_datetime(values, errors="coerce", utc=False)
-        return np.asarray(parsed.astype("datetime64[s]").astype(np.int64), dtype=np.float64)
-    except (TypeError, ValueError):
-        pass
-
     out = np.empty(len(values), dtype=np.float64)
     for i, v in enumerate(values):
         if v is None:
             out[i] = np.nan
             continue
         try:
-            out[i] = float(np.datetime64(v).astype("datetime64[s]").astype(np.int64))
+            parsed = np.datetime64(v).astype("datetime64[s]")
+            out[i] = np.nan if np.isnat(parsed) else float(parsed.astype(np.int64))
         except (TypeError, ValueError):
             try:
                 out[i] = float(v)
