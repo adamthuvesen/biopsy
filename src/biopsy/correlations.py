@@ -443,6 +443,75 @@ def _auc_scores(y: np.ndarray, score: np.ndarray) -> tuple[float, float] | None:
     return raw, float(2 * abs(raw - 0.5))
 
 
+def _score_feature_vs_target(
+    feat: str,
+    raw: np.ndarray,
+    j: int,
+    stats: dict[str, ColumnStats],
+    y_full: np.ndarray,
+    target_mask: np.ndarray,
+    target_kind: str,
+    is_binary_target: bool,
+) -> tuple[TargetSignal, np.ndarray, bool, np.ndarray] | None:
+    """Score one feature against the target; returns signal + permutation record."""
+    feat_mask = _valid_mask(raw[:, j]) & target_mask
+    if feat_mask.sum() < 30:
+        return None
+
+    x_enc, x_disc = _encode(raw[feat_mask, j], stats[feat].kind)
+    y_sub_mask = feat_mask[target_mask]
+    y_sub = y_full[y_sub_mask]
+    X = x_enc.reshape(-1, 1)
+
+    try:
+        if target_kind == "classification":
+            mi = mutual_info_classif(
+                X, y_sub.astype(int), discrete_features=[x_disc], random_state=42
+            )[0]
+            pps_score = _pps_classification(X, y_sub.astype(int))
+            method = "pps_classif"
+        else:
+            mi = mutual_info_regression(
+                X, y_sub, discrete_features=[x_disc], random_state=42
+            )[0]
+            pps_score = _pps_regression(X, y_sub)
+            method = "pps_regress"
+    except ValueError:
+        return None
+
+    mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
+
+    spearman = None
+    if stats[feat].kind == "numeric" and (
+        target_kind == "regression" or is_binary_target
+    ):
+        spearman = _spearman(x_enc, y_sub.astype(np.float64))
+
+    raw_auc = None
+    auc = None
+    if is_binary_target:
+        auc_pair = _auc_scores(y_sub.astype(int), x_enc)
+        if auc_pair is not None:
+            raw_auc, auc = auc_pair
+
+    minority_count = None
+    if is_binary_target:
+        counts = np.bincount(y_sub.astype(int), minlength=2)
+        minority_count = int(counts.min())
+    signal = TargetSignal(
+        feature=feat,
+        score=pps_score,
+        mutual_info=mi_norm,
+        method=method,
+        spearman=spearman,
+        auc=auc,
+        raw_auc=raw_auc,
+        support=int(feat_mask.sum()),
+        positive_count=minority_count,
+    )
+    return signal, x_enc, x_disc, feat_mask
+
+
 def target_signal(
     src: Source,
     stats: dict[str, ColumnStats],
@@ -462,9 +531,10 @@ def target_signal(
     """
     if target not in stats:
         raise ValueError(f"Target column not found: {target}")
-    from biopsy.temporal import _target_kind  # local import: temporal already imports correlations
+    from biopsy.targets import target_task_kind
+
     t_stats = stats[target]
-    target_kind = _target_kind(t_stats)
+    target_kind = target_task_kind(t_stats)
 
     features = [
         n for n, s in stats.items()
@@ -500,61 +570,13 @@ def target_signal(
 
     signals: list[TargetSignal] = []
     for j, feat in enumerate(features):
-        feat_mask = _valid_mask(raw[:, j]) & target_mask
-        if feat_mask.sum() < 30:
+        scored = _score_feature_vs_target(
+            feat, raw, j, stats, y_full, target_mask, target_kind, is_binary_target,
+        )
+        if scored is None:
             continue
-
-        x_enc, x_disc = _encode(raw[feat_mask, j], stats[feat].kind)
-        y_sub_mask = feat_mask[target_mask]
-        y_sub = y_full[y_sub_mask]
-        X = x_enc.reshape(-1, 1)
-
-        try:
-            if target_kind == "classification":
-                mi = mutual_info_classif(
-                    X, y_sub.astype(int), discrete_features=[x_disc], random_state=42
-                )[0]
-                pps_score = _pps_classification(X, y_sub.astype(int))
-                method = "pps_classif"
-            else:
-                mi = mutual_info_regression(
-                    X, y_sub, discrete_features=[x_disc], random_state=42
-                )[0]
-                pps_score = _pps_regression(X, y_sub)
-                method = "pps_regress"
-        except ValueError:
-            # sklearn raises ValueError for degenerate per-feature inputs
-            # (all-NaN after masking, single class after sampling). Skip the
-            # feature instead of aborting the whole ranking.
-            continue
-
-        mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
-
-        # Spearman: numeric feature only; numeric or binary target
-        spearman = None
-        if stats[feat].kind == "numeric" and (
-            target_kind == "regression" or is_binary_target
-        ):
-            spearman = _spearman(x_enc, y_sub.astype(np.float64))
-
-        # AUC: only binary classification target
-        raw_auc = None
-        auc = None
-        if is_binary_target:
-            auc_pair = _auc_scores(y_sub.astype(int), x_enc)
-            if auc_pair is not None:
-                raw_auc, auc = auc_pair
-
-        minority_count = None
-        if is_binary_target:
-            counts = np.bincount(y_sub.astype(int), minlength=2)
-            minority_count = int(counts.min())
-        signals.append(TargetSignal(
-            feature=feat, score=pps_score, mutual_info=mi_norm, method=method,
-            spearman=spearman, auc=auc, raw_auc=raw_auc,
-            support=int(feat_mask.sum()),
-            positive_count=minority_count,
-        ))
+        signal, x_enc, x_disc, feat_mask = scored
+        signals.append(signal)
         feat_records.append((feat, x_enc, x_disc, feat_mask))
 
     if include_permutation:

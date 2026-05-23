@@ -21,8 +21,9 @@ from markupsafe import Markup
 from plotly.offline import get_plotlyjs
 
 from biopsy.correlations import CorrelationPair, TargetSignal
-from biopsy.findings import Finding
+from biopsy.findings import Finding, severity_counts
 from biopsy.profile import Profile
+from biopsy.render.charts import column_chart_html
 from biopsy.stats import _NUMERIC_TYPES, ColumnStats
 from biopsy.temporal import TemporalReport, TemporalSignal
 
@@ -474,9 +475,10 @@ def _quality_score(prof: Profile) -> tuple[int, str]:
     Heuristic, not science: penalize critical findings hardest, warnings less,
     info trivially. Floor at 0.
     """
-    crit = sum(1 for f in prof.findings if f.severity == "critical")
-    warn = sum(1 for f in prof.findings if f.severity == "warning")
-    info = sum(1 for f in prof.findings if f.severity == "info")
+    counts = severity_counts(prof.findings)
+    crit = counts["critical"]
+    warn = counts["warning"]
+    info = counts["info"]
     penalty = crit * 15 + warn * 5 + info * 1
     score = max(0, 100 - penalty)
     if crit > 0 or score < 40:
@@ -492,36 +494,17 @@ def _quality_score(prof: Profile) -> tuple[int, str]:
 
 # --- template binding ------------------------------------------------------
 
-def render_string(
+def _build_report_context(
     prof: Profile,
     *,
-    embed_plotly: bool = True,
     heatmap_limit: int = 60,
-) -> str:
-    _ensure_template()
-    tpl_dir = Path(__file__).parent.parent / "templates"
-    env = Environment(
-        loader=FileSystemLoader(tpl_dir),
-        autoescape=select_autoescape(["html"]),
-    )
-    env.filters["pct"] = lambda x: "—" if x == 0 else (f"{x:.0%}" if x >= 0.01 else "<1%")
-    env.filters["num"] = _num
-    env.filters["commafy"] = lambda x: f"{x:,}"
-    env.filters["ticks"] = _ticks_filter
-
+) -> dict[str, Any]:
+    """Assemble Jinja context for the main profile report."""
     columns_payload = []
     for s in prof.columns.values():
-        if s.kind == "numeric":
-            chart = _histogram_fig(s)
-        elif s.kind in {"text", "bool"}:
-            chart = _bar_fig(s)
-        elif s.kind == "temporal":
-            chart = _temporal_column_fig(s)
-        else:
-            chart = ""
         columns_payload.append({
             "stats": s,
-            "chart": chart,
+            "chart": column_chart_html(s),
             "is_target": s.name == prof.target,
             "is_time": s.name == prof.time_column,
         })
@@ -580,14 +563,7 @@ def render_string(
             stats = prof.columns.get(entry.feature)
             if stats is None:
                 continue
-            if stats.kind == "numeric":
-                chart = _histogram_fig(stats)
-            elif stats.kind in {"text", "bool"}:
-                chart = _bar_fig(stats)
-            elif stats.kind == "temporal":
-                chart = _temporal_column_fig(stats)
-            else:
-                chart = ""
+            chart = column_chart_html(stats)
             top_corrs = [
                 p for p in prof.correlations
                 if entry.feature in (p.a, p.b) and p.score >= 0.3
@@ -602,11 +578,7 @@ def render_string(
     quality_score, verdict = _quality_score(prof)
 
     # Severity tallies for the vital signs ribbon.
-    sev_counts = {
-        "critical": sum(1 for f in prof.findings if f.severity == "critical"),
-        "warning": sum(1 for f in prof.findings if f.severity == "warning"),
-        "info": sum(1 for f in prof.findings if f.severity == "info"),
-    }
+    sev_counts = severity_counts(prof.findings)
     # Quality stats for the vitals: numeric/text/temporal split.
     kind_counts: dict[str, int] = {}
     null_total = 0
@@ -616,38 +588,59 @@ def render_string(
     cells_total = prof.n_rows * max(prof.n_cols, 1)
     null_share = (null_total / cells_total) if cells_total else 0.0
 
-    # Verdict cards: top 3 findings (critical, warning, info — best each).
     verdict_cards = _verdict_cards(prof.findings)
 
-    tpl = env.get_template("report.html.j2")
-    html = tpl.render(
-        prof=prof,
-        columns=columns_payload,
-        target_chart=target_chart,
-        target_prevalence_chart=target_prevalence_chart,
-        target_signals=prof.target_signals,
-        temporal_chart=temporal_chart,
-        temporal_signals=temporal_signals,
-        temporal_buckets=temporal_buckets,
-        shortlist_chart=shortlist_chart,
-        shortlist=shortlist_entries,
-        clusters=clusters_payload,
-        cluster_cutoff=prof.clusters.cutoff if prof.clusters else None,
-        pearson_heatmap=pearson_heatmap,
-        mi_heatmap=mi_heatmap,
-        action_plan=action_plan,
-        drilldown_cards=drilldown_cards,
-        quality_score=quality_score,
-        verdict=verdict,
-        sev_counts=sev_counts,
-        kind_counts=kind_counts,
-        null_share=null_share,
-        verdict_cards=verdict_cards,
-        severity_color=SEVERITY_COLOR,
-        plotly_cdn=None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js",
-        plotly_js=get_plotlyjs() if embed_plotly else None,
-        palette=_palette(include_dark=True),
+    return {
+        "prof": prof,
+        "columns": columns_payload,
+        "target_chart": target_chart,
+        "target_prevalence_chart": target_prevalence_chart,
+        "target_signals": prof.target_signals,
+        "temporal_chart": temporal_chart,
+        "temporal_signals": temporal_signals,
+        "temporal_buckets": temporal_buckets,
+        "shortlist_chart": shortlist_chart,
+        "shortlist": shortlist_entries,
+        "clusters": clusters_payload,
+        "cluster_cutoff": prof.clusters.cutoff if prof.clusters else None,
+        "pearson_heatmap": pearson_heatmap,
+        "mi_heatmap": mi_heatmap,
+        "action_plan": action_plan,
+        "drilldown_cards": drilldown_cards,
+        "quality_score": quality_score,
+        "verdict": verdict,
+        "sev_counts": sev_counts,
+        "kind_counts": kind_counts,
+        "null_share": null_share,
+        "verdict_cards": verdict_cards,
+        "severity_color": SEVERITY_COLOR,
+    }
+
+
+def render_string(
+    prof: Profile,
+    *,
+    embed_plotly: bool = True,
+    heatmap_limit: int = 60,
+) -> str:
+    _ensure_template()
+    tpl_dir = Path(__file__).parent.parent / "templates"
+    env = Environment(
+        loader=FileSystemLoader(tpl_dir),
+        autoescape=select_autoescape(["html"]),
     )
+    env.filters["pct"] = lambda x: "—" if x == 0 else (f"{x:.0%}" if x >= 0.01 else "<1%")
+    env.filters["num"] = _num
+    env.filters["commafy"] = lambda x: f"{x:,}"
+    env.filters["ticks"] = _ticks_filter
+
+    ctx = _build_report_context(prof, heatmap_limit=heatmap_limit)
+    ctx["plotly_cdn"] = None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js"
+    ctx["plotly_js"] = get_plotlyjs() if embed_plotly else None
+    ctx["palette"] = _palette(include_dark=True)
+
+    tpl = env.get_template("report.html.j2")
+    html = tpl.render(**ctx)
     return html
 
 

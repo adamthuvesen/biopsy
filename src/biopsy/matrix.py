@@ -20,7 +20,8 @@ def _fetch_object_array(
     if callable(fetch_numpy):
         try:
             cols_dict = fetch_numpy()
-        except Exception:
+        # DuckDB binding/version differences: fall back to fetchall().
+        except (TypeError, ValueError, KeyError, AttributeError):
             cols_dict = None
         if cols_dict:
             try:
