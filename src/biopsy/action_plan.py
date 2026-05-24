@@ -80,30 +80,41 @@ class ActionPlan:
         """Flatten into list[dict] for serialization and the API helpers."""
         out: list[dict[str, Any]] = []
         for bucket, items in (
-            ("drop", self.drop), ("review", self.review),
-            ("transform", self.transform), ("encode", self.encode),
+            ("drop", self.drop),
+            ("review", self.review),
+            ("transform", self.transform),
+            ("encode", self.encode),
             ("impute", self.impute),
         ):
             for item in items:
-                out.append({
-                    "bucket": bucket,
-                    "column": item.column,
-                    "action": item.action,
-                    "reason": item.reason,
-                    "severity": item.severity,
-                    "evidence": list(item.evidence),
-                })
+                out.append(
+                    {
+                        "bucket": bucket,
+                        "column": item.column,
+                        "action": item.action,
+                        "reason": item.reason,
+                        "severity": item.severity,
+                        "evidence": list(item.evidence),
+                    }
+                )
         return out
 
 
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
-_DROP_KINDS: frozenset[str] = frozenset({
-    "all_null", "constant", "near_constant", "identifier_shape",
-})
+_DROP_KINDS: frozenset[str] = frozenset(
+    {
+        "all_null",
+        "constant",
+        "near_constant",
+        "identifier_shape",
+    }
+)
 _REVIEW_CATEGORIES = {"leakage", "temporal", "target"}
 # Fallback for older JSON profiles round-tripped before `Finding.kind` existed.
 _DROP_TITLE_MARKERS = (
-    "is 100% null", "is constant", "is near-constant",
+    "is 100% null",
+    "is constant",
+    "is near-constant",
     "looks like an identifier",
 )
 
@@ -133,33 +144,45 @@ def build_action_plan(prof: Profile) -> ActionPlan:
             not f.kind and any(m in f.title for m in _DROP_TITLE_MARKERS)
         )
         if is_drop_kind:
-            _add(drop, col, ActionItem(
-                column=col,
-                action="drop",
-                reason=reason,
-                severity=f.severity,
-                evidence=[title],
-            ))
+            _add(
+                drop,
+                col,
+                ActionItem(
+                    column=col,
+                    action="drop",
+                    reason=reason,
+                    severity=f.severity,
+                    evidence=[title],
+                ),
+            )
             continue
         if f.category == "quality" and f.severity == "critical":
-            _add(drop, col, ActionItem(
-                column=col,
-                action="drop",
-                reason=reason,
-                severity=f.severity,
-                evidence=[title],
-            ))
+            _add(
+                drop,
+                col,
+                ActionItem(
+                    column=col,
+                    action="drop",
+                    reason=reason,
+                    severity=f.severity,
+                    evidence=[title],
+                ),
+            )
             continue
 
         # --- review bucket: leakage / temporal / target issues -------------
         if f.category in _REVIEW_CATEGORIES and f.severity in {"critical", "warning"}:
-            _add(review, col, ActionItem(
-                column=col,
-                action="review",
-                reason=reason,
-                severity=f.severity,
-                evidence=[title],
-            ))
+            _add(
+                review,
+                col,
+                ActionItem(
+                    column=col,
+                    action="review",
+                    reason=reason,
+                    severity=f.severity,
+                    evidence=[title],
+                ),
+            )
             continue
 
         # --- distribution → transform suggestions --------------------------
@@ -176,27 +199,33 @@ def build_action_plan(prof: Profile) -> ActionPlan:
                 action = "log1p" if positive_only else "yeo_johnson"
             else:
                 action = "robust_scaler"
-            _add(transform, col, ActionItem(
-                column=col,
-                action=action,
-                reason=reason,
-                severity=f.severity,
-                evidence=[title],
-            ))
+            _add(
+                transform,
+                col,
+                ActionItem(
+                    column=col,
+                    action=action,
+                    reason=reason,
+                    severity=f.severity,
+                    evidence=[title],
+                ),
+            )
             continue
 
         # --- encoded null sentinels → review (replace before profile) ------
-        is_encoded_nulls = f.kind == "encoded_nulls" or (
-            not f.kind and "encoded nulls" in f.title
-        )
+        is_encoded_nulls = f.kind == "encoded_nulls" or (not f.kind and "encoded nulls" in f.title)
         if is_encoded_nulls:
-            _add(review, col, ActionItem(
-                column=col,
-                action="replace_sentinel_with_null",
-                reason=reason,
-                severity=f.severity,
-                evidence=[title],
-            ))
+            _add(
+                review,
+                col,
+                ActionItem(
+                    column=col,
+                    action="replace_sentinel_with_null",
+                    reason=reason,
+                    severity=f.severity,
+                    evidence=[title],
+                ),
+            )
             continue
 
     # --- impute bucket: any non-target column with null_rate in (0, 1) -----
@@ -221,22 +250,30 @@ def build_action_plan(prof: Profile) -> ActionPlan:
                 f"{stats.null_rate:.0%} of rows are null on a {stats.kind} column — "
                 "biopsy cannot recommend an impute strategy automatically."
             )
-            _add(review, stats.name, ActionItem(
-                column=stats.name,
-                action="impute_manually",
-                reason=review_reason,
-                severity="warning" if stats.null_rate > 0.1 else "info",
-                evidence=[review_reason],
-            ))
+            _add(
+                review,
+                stats.name,
+                ActionItem(
+                    column=stats.name,
+                    action="impute_manually",
+                    reason=review_reason,
+                    severity="warning" if stats.null_rate > 0.1 else "info",
+                    evidence=[review_reason],
+                ),
+            )
             continue
         reason = f"{stats.null_rate:.0%} of rows are null"
-        _add(impute, stats.name, ActionItem(
-            column=stats.name,
-            action=action,
-            reason=reason,
-            severity="warning" if stats.null_rate > 0.1 else "info",
-            evidence=[reason],
-        ))
+        _add(
+            impute,
+            stats.name,
+            ActionItem(
+                column=stats.name,
+                action=action,
+                reason=reason,
+                severity="warning" if stats.null_rate > 0.1 else "info",
+                evidence=[reason],
+            ),
+        )
 
     # --- encode bucket: categorical features (skip target, skip dropped) ---
     for stats in prof.columns.values():
@@ -267,13 +304,17 @@ def build_action_plan(prof: Profile) -> ActionPlan:
                 f"high cardinality ({n_unique:,} levels) — use out-of-fold "
                 "target encoding to avoid leakage"
             )
-        _add(encode, stats.name, ActionItem(
-            column=stats.name,
-            action=choice,
-            reason=why,
-            severity="info",
-            evidence=[why],
-        ))
+        _add(
+            encode,
+            stats.name,
+            ActionItem(
+                column=stats.name,
+                action=choice,
+                reason=why,
+                severity="info",
+                evidence=[why],
+            ),
+        )
 
     # --- split & cv & class strategy ---------------------------------------
     split, cv = _recommend_split_and_cv(prof)
@@ -354,8 +395,8 @@ def _recommend_split_and_cv(prof: Profile) -> tuple[SplitRecommendation, CVRecom
         stratify_on = target_summary.name
         rate = target_summary.positive_rate
         detail = (
-            f"Stratified 80/20 holdout on `{stratify_on}` "
-            f"(positive rate {rate:.2%})." if rate is not None
+            f"Stratified 80/20 holdout on `{stratify_on}` (positive rate {rate:.2%})."
+            if rate is not None
             else f"Stratified 80/20 holdout on `{stratify_on}`."
         )
         split = SplitRecommendation(
@@ -371,8 +412,10 @@ def _recommend_split_and_cv(prof: Profile) -> tuple[SplitRecommendation, CVRecom
         return split, cv
 
     # 4: regression / no target.
-    detail = "Random 80/20 holdout (no target supplied)." if target_summary is None else (
-        f"Random 80/20 holdout on regression target `{target_summary.name}`."
+    detail = (
+        "Random 80/20 holdout (no target supplied)."
+        if target_summary is None
+        else (f"Random 80/20 holdout on regression target `{target_summary.name}`.")
     )
     split = SplitRecommendation(kind="random", detail=detail)
     cv = CVRecommendation(
@@ -494,9 +537,9 @@ def to_sklearn_pipeline_code(prof: Profile, plan: ActionPlan | None = None) -> s
         numeric_impute_strategy = "mean"
 
     target_repr = repr(prof.target) if prof.target else "None"
-    dropped_block = "\n".join(
-        f"#   - {item.column}: {item.reason}" for item in plan.drop
-    ) or "#   (none)"
+    dropped_block = (
+        "\n".join(f"#   - {item.column}: {item.reason}" for item in plan.drop) or "#   (none)"
+    )
 
     split_block = "#   (no split recommendation)"
     if plan.split is not None:

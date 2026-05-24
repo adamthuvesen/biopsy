@@ -53,8 +53,7 @@ def open_postgres(
     table = parsed.table
     if not table:
         raise ValueError(
-            "Postgres URI must specify a table via ?table=schema.name "
-            f"(got {parsed.qualified})"
+            f"Postgres URI must specify a table via ?table=schema.name (got {parsed.qualified})"
         )
 
     creds = resolve_credentials("postgres", prefix=credentials_env)
@@ -73,11 +72,7 @@ def open_postgres(
     # attach is still in effect — degrade gracefully. The readonly lint
     # test catches code-level mutations regardless of this runtime check.
     with contextlib.suppress(Exception):
-        con.execute(
-            f"CALL postgres_execute("
-            f"'{alias}', 'SET default_transaction_read_only = on'"
-            f")"
-        )
+        con.execute(f"CALL postgres_execute('{alias}', 'SET default_transaction_read_only = on')")
 
     qualified_table = f"{alias}.{table}"
 

@@ -12,6 +12,7 @@ from biopsy.profile import profile
 def test_m5_all_null_column_is_quality_critical(tmp_path: Path) -> None:
     """M5: 100%-null columns should be flagged as critical-quality, not warning-constant."""
     import csv as csv_module
+
     p = tmp_path / "demo.csv"
     with p.open("w", newline="") as f:
         w = csv_module.writer(f)
@@ -49,6 +50,7 @@ def test_numeric_near_constant_column_is_flagged(tmp_path: Path) -> None:
 def test_m7_looks_like_id_no_false_positives() -> None:
     """M7: short words ending in 'id' (paid, liquid, valid) must not be flagged."""
     from biopsy.inference import looks_like_id
+
     assert looks_like_id("id")
     assert looks_like_id("user_id")
     assert looks_like_id("uuid")
@@ -81,24 +83,23 @@ def test_free_text_column_flagged_and_excluded(tmp_path: Path) -> None:
 
     prof = profile(p)
     review_findings = [f for f in prof.findings if "review" in f.columns]
-    assert any("free text" in f.title.lower() for f in review_findings), \
+    assert any("free text" in f.title.lower() for f in review_findings), (
         f"expected free-text finding, got {[f.title for f in review_findings]}"
+    )
 
 
 def test_date_string_detection_suggests_cast() -> None:
     """A pandas DataFrame whose date column is stored as object/string
     surfaces a quality finding asking for a cast."""
     pd = pytest.importorskip("pandas")
-    rows = [
-        {"timestamp": f"2024-01-{(i % 28) + 1:02d}", "x": i}
-        for i in range(1500)
-    ]
+    rows = [{"timestamp": f"2024-01-{(i % 28) + 1:02d}", "x": i} for i in range(1500)]
     df = pd.DataFrame(rows)
     df["timestamp"] = df["timestamp"].astype("string")
     prof = profile(df, source_name="date-strings")
     timestamp_findings = [f for f in prof.findings if "timestamp" in f.columns]
-    assert any("stored as a string" in f.title for f in timestamp_findings), \
+    assert any("stored as a string" in f.title for f in timestamp_findings), (
         f"got {[f.title for f in timestamp_findings]}"
+    )
 
 
 def test_bool_like_int_detected_and_handled(tmp_path: Path) -> None:
@@ -134,5 +135,3 @@ def test_high_card_cat_warns_about_target_encoding(tmp_path: Path) -> None:
     prof = profile(p, target="target")
     zip_findings = [f for f in prof.findings if "zip" in f.columns]
     assert any("target encoding" in f.title.lower() for f in zip_findings)
-
-

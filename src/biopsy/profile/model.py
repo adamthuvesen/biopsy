@@ -1,4 +1,5 @@
 """Profile dataclass and query helpers."""
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ from biopsy.temporal import TemporalReport
 if TYPE_CHECKING:
     from biopsy.action_plan import ActionPlan
     from biopsy.profile.diff import ProfileDiff
+
 
 @dataclass
 class Profile:
@@ -119,12 +121,8 @@ class Profile:
                 name: _column_stats_from_payload(payload)
                 for name, payload in data.get("columns", {}).items()
             },
-            correlations=[
-                CorrelationPair(**payload) for payload in data.get("correlations", [])
-            ],
-            target_signals=[
-                TargetSignal(**payload) for payload in data.get("target_signals", [])
-            ],
+            correlations=[CorrelationPair(**payload) for payload in data.get("correlations", [])],
+            target_signals=[TargetSignal(**payload) for payload in data.get("target_signals", [])],
             temporal=_from_temporal_report(data.get("temporal")),
             clusters=_from_cluster_report(data.get("clusters")),
             findings=[Finding(**payload) for payload in data.get("findings", [])],
@@ -154,7 +152,8 @@ class Profile:
         severities = _filter_set(severity)
         categories = _filter_set(category)
         findings = [
-            f for f in self.findings
+            f
+            for f in self.findings
             if (severities is None or f.severity in severities)
             and (categories is None or f.category in categories)
         ]
@@ -167,10 +166,7 @@ class Profile:
     ) -> list[str]:
         if self.clusters is None:
             return []
-        features = [
-            e.feature for e in self.clusters.shortlist
-            if include_weak or not e.is_weak
-        ]
+        features = [e.feature for e in self.clusters.shortlist if include_weak or not e.is_weak]
         return features if limit is None else features[:limit]
 
     def leakage_suspects(self) -> list[str]:
@@ -238,8 +234,6 @@ def _pandas() -> Any:
         import pandas as pd
     except ImportError as exc:
         raise ImportError(
-            "Profile frame helpers require pandas. Install with "
-            "`pip install 'biopsy[dataframe]'`."
+            "Profile frame helpers require pandas. Install with `pip install 'biopsy[dataframe]'`."
         ) from exc
     return pd
-

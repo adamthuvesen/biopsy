@@ -23,8 +23,7 @@ def test_temporal_detects_planted_leak(tmp_path: Path) -> None:
     # Time-ordered train (early only, all noise) → low time_pps.
     # Reason carries "future information"; categorized as leakage.
     critical_leakage = [
-        f for f in prof.findings
-        if f.category == "leakage" and f.severity == "critical"
+        f for f in prof.findings if f.category == "leakage" and f.severity == "critical"
     ]
     feats = [c for f in critical_leakage for c in f.columns]
     assert "cohort_engagement_v2" in feats, (
@@ -35,6 +34,7 @@ def test_temporal_detects_planted_leak(tmp_path: Path) -> None:
 
 def test_temporal_skipped_when_no_time_column(tmp_path: Path) -> None:
     import csv as csv_module
+
     p = tmp_path / "no_time.csv"
     with p.open("w") as f:
         w = csv_module.writer(f)
@@ -52,6 +52,7 @@ def test_temporal_skipped_when_no_time_column(tmp_path: Path) -> None:
 
 def test_multiple_time_columns_emits_info(tmp_path: Path) -> None:
     import csv as csv_module
+
     p = tmp_path / "multi_time.csv"
     with p.open("w") as f:
         w = csv_module.writer(f)
@@ -62,8 +63,7 @@ def test_multiple_time_columns_emits_info(tmp_path: Path) -> None:
     prof = profile(p)
     assert prof.time_column is None  # ambiguous → skip
     info_findings = [
-        f for f in prof.findings
-        if f.category == "temporal" and "pass --time" in f.detail.lower()
+        f for f in prof.findings if f.category == "temporal" and "pass --time" in f.detail.lower()
     ]
     assert info_findings, "expected info finding directing user to --time"
 
@@ -223,7 +223,8 @@ def test_regression_diff_target_drift_surfaces(tmp_path: Path) -> None:
     assert prof.temporal.target_drift_score is not None
     assert prof.temporal.target_drift_score >= 1.0
     findings = [
-        f for f in prof.findings
+        f
+        for f in prof.findings
         if f.category == "temporal" and {"target", "event_date"}.issubset(f.columns)
     ]
     assert findings
@@ -237,26 +238,21 @@ def test_post_event_feature_triggers_leakage_finding(tmp_path: Path) -> None:
     csv = write_demo_csv(tmp_path / "demo.csv", n=2500)
     prof = profile(csv, target="churned")
     leakage = [
-        f for f in prof.findings
+        f
+        for f in prof.findings
         if f.category == "leakage"
         and "cohort_engagement_v2" in f.columns
         and "future information" in f.detail.lower()
     ]
     assert leakage, (
-        f"expected post-event leakage finding, "
-        f"got {[(f.category, f.title) for f in prof.findings]}"
+        f"expected post-event leakage finding, got {[(f.category, f.title) for f in prof.findings]}"
     )
-
-
 
 
 def test_temporal_signal_leakage_kind_on_planted_leak(tmp_path: Path) -> None:
     csv = write_demo_csv(tmp_path / "demo.csv", n=2500)
     prof = profile(csv, target="churned")
     assert prof.temporal is not None
-    sig = next(
-        s for s in prof.temporal.signals if s.feature == "cohort_engagement_v2"
-    )
+    sig = next(s for s in prof.temporal.signals if s.feature == "cohort_engagement_v2")
     assert sig.leakage_kind in {"random_cv", "post_event"}
     assert sig.severity == "critical"
-

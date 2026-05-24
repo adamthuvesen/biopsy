@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 # Default RAM-bound warning. ~5×10⁸ cells (rows × columns) is the point
 # at which pyarrow materialization gets sluggish and likely OOMs on a
 # laptop. Cell count beats raw row count because wide tables compound.
-DEFAULT_CELL_BUDGET = 5 * 10 ** 8
+DEFAULT_CELL_BUDGET = 5 * 10**8
 
 
 # Snowflake type → DuckDB-like type. Snowflake's `data_type` column in
@@ -113,7 +113,9 @@ def open_snowflake(
 
 
 def discover_schema(
-    parsed: ParsedURI, *, credentials_env: str | None = None,
+    parsed: ParsedURI,
+    *,
+    credentials_env: str | None = None,
 ) -> tuple[dict[str, str], int | None]:
     """Schema + row-count via INFORMATION_SCHEMA.
 
@@ -161,7 +163,8 @@ def _connect(credentials_env: str | None) -> tuple[Any, Any]:
     password = creds.get("SNOWFLAKE_PASSWORD")
     if private_key_path:
         kwargs["private_key"] = _load_private_key(
-            private_key_path, creds.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
+            private_key_path,
+            creds.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
         )
     elif password:
         kwargs["password"] = password
@@ -184,6 +187,7 @@ def _connect(credentials_env: str | None) -> tuple[Any, Any]:
 
     def cleanup() -> None:
         import contextlib
+
         with contextlib.suppress(Exception):
             sf_con.close()
 
@@ -226,21 +230,23 @@ def _split_table(parsed: ParsedURI) -> tuple[str, str, str]:
     parts = path.split(".") if path else []
     if len(parts) != 3:
         raise ValueError(
-            f"Snowflake URI must be snowflake://account/db.schema.table "
-            f"(got {parsed.qualified})"
+            f"Snowflake URI must be snowflake://account/db.schema.table (got {parsed.qualified})"
         )
     return parts[0], parts[1], parts[2]
 
 
 def _fetch_schema(
-    sf_con: Any, database: str, schema_name: str, table: str,
+    sf_con: Any,
+    database: str,
+    schema_name: str,
+    table: str,
 ) -> dict[str, str]:
     """Return {column_name: snowflake_type} from INFORMATION_SCHEMA.COLUMNS."""
     sql = (
-        f'SELECT column_name, data_type '
+        f"SELECT column_name, data_type "
         f'FROM "{database}"."INFORMATION_SCHEMA"."COLUMNS" '
-        f'WHERE table_schema = %s AND table_name = %s '
-        f'ORDER BY ordinal_position'
+        f"WHERE table_schema = %s AND table_name = %s "
+        f"ORDER BY ordinal_position"
     )
     cur = sf_con.cursor()
     try:
@@ -257,13 +263,16 @@ def _fetch_schema(
 
 
 def _fetch_row_count(
-    sf_con: Any, database: str, schema_name: str, table: str,
+    sf_con: Any,
+    database: str,
+    schema_name: str,
+    table: str,
 ) -> int | None:
     """Return INFORMATION_SCHEMA.TABLES.ROW_COUNT — None for views."""
     sql = (
-        f'SELECT row_count '
+        f"SELECT row_count "
         f'FROM "{database}"."INFORMATION_SCHEMA"."TABLES" '
-        f'WHERE table_schema = %s AND table_name = %s'
+        f"WHERE table_schema = %s AND table_name = %s"
     )
     cur = sf_con.cursor()
     try:
@@ -277,7 +286,8 @@ def _fetch_row_count(
 
 
 def _build_where(
-    expressions: list[str], sf_schema: dict[str, str],
+    expressions: list[str],
+    sf_schema: dict[str, str],
 ) -> str:
     """Parse user `--filter` predicates against the Snowflake schema.
 
@@ -288,10 +298,7 @@ def _build_where(
         return ""
     from biopsy.io import parse_filter_expr
 
-    duckdb_dtypes = {
-        name: _SF_TO_DUCKDB_TYPE.get(dt.upper(), dt)
-        for name, dt in sf_schema.items()
-    }
+    duckdb_dtypes = {name: _SF_TO_DUCKDB_TYPE.get(dt.upper(), dt) for name, dt in sf_schema.items()}
     clauses = [parse_filter_expr(expr, duckdb_dtypes) for expr in expressions]
     return " AND ".join(f"({c})" for c in clauses)
 

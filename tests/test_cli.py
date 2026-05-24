@@ -117,9 +117,7 @@ def test_notebook_starter_writes_valid_json(tmp_path: Path) -> None:
     csv = write_demo_csv(tmp_path / "demo.csv", n=800)
     out = tmp_path / "starter.ipynb"
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["notebook", str(out), "--file", str(csv), "--target", "churned"]
-    )
+    result = runner.invoke(app, ["notebook", str(out), "--file", str(csv), "--target", "churned"])
     assert result.exit_code == 0, result.output
     assert out.exists()
     nb = _json.loads(out.read_text())
@@ -146,9 +144,7 @@ def test_notebook_starter_uses_regression_baseline(tmp_path: Path) -> None:
             w.writerow([i, i * 0.5 + 1])
 
     out = tmp_path / "starter.ipynb"
-    result = CliRunner().invoke(
-        app, ["notebook", str(out), "--file", str(csv), "--target", "y"]
-    )
+    result = CliRunner().invoke(app, ["notebook", str(out), "--file", str(csv), "--target", "y"])
 
     assert result.exit_code == 0, result.output
     nb = _json.loads(out.read_text())
@@ -317,9 +313,13 @@ def test_cli_compare_runs_end_to_end(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "compare", str(a_path), str(b_path),
-            "--target", "target",
-            "--html", str(html_out),
+            "compare",
+            str(a_path),
+            str(b_path),
+            "--target",
+            "target",
+            "--html",
+            str(html_out),
             "--no-progress",
         ],
     )
@@ -400,5 +400,3 @@ def test_cli_compare_passes_credentials_env_to_profile(
 
     assert result.exit_code == 0, result.output
     assert [call["kwargs"]["credentials_env"] for call in calls] == ["STAGING", "STAGING"]
-
-

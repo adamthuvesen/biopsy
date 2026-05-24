@@ -22,9 +22,7 @@ def notebook_cmd(
     prof = cli.profile_fn(data_file, target=target, time_col=time_col)
     pipeline_code = prof.to_sklearn_pipeline_code()
     plan = prof.action_plan()
-    shortlist = (
-        [e.feature for e in prof.clusters.shortlist[:20]] if prof.clusters else []
-    )
+    shortlist = [e.feature for e in prof.clusters.shortlist[:20]] if prof.clusters else []
     split_detail = plan.split.detail if plan.split else "Random 80/20 holdout"
     cv_detail = plan.cv.detail if plan.cv else "KFold(n_splits=5)"
     class_detail = plan.class_strategy.detail if plan.class_strategy else None
@@ -45,7 +43,6 @@ def notebook_cmd(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(notebook_json, encoding="utf-8")
     console.print(f"[dim]Notebook:[/dim] {output}")
-
 
 
 def starter_notebook(
@@ -104,7 +101,7 @@ def starter_notebook(
         baseline_code = (
             "# `build_preprocessor` is defined by the cell above (biopsy codegen).\n"
             "assert 'build_preprocessor' in dir(), "
-            "\"Pipeline cell did not define build_preprocessor()\"\n"
+            '"Pipeline cell did not define build_preprocessor()"\n'
             "preproc = build_preprocessor()\n"
             "pipe = Pipeline([\n"
             "    ('preprocess', preproc),\n"
@@ -135,7 +132,7 @@ def starter_notebook(
         baseline_code = (
             "# `build_preprocessor` is defined by the cell above (biopsy codegen).\n"
             "assert 'build_preprocessor' in dir(), "
-            "\"Pipeline cell did not define build_preprocessor()\"\n"
+            '"Pipeline cell did not define build_preprocessor()"\n'
             "preproc = build_preprocessor()\n"
             "pipe = Pipeline([\n"
             "    ('preprocess', preproc),\n"
@@ -146,17 +143,12 @@ def starter_notebook(
             "print('MAE =', mean_absolute_error(y_test, pred))\n"
         )
     else:
-        imports = (
-            "import pandas as pd\n"
-        )
-        split_code = (
-            "X = df.drop(columns=[TARGET]) if TARGET else df\n"
-            "X.head()\n"
-        )
+        imports = "import pandas as pd\n"
+        split_code = "X = df.drop(columns=[TARGET]) if TARGET else df\nX.head()\n"
         baseline_code = (
             "# `build_preprocessor` is defined by the cell above (biopsy codegen).\n"
             "assert 'build_preprocessor' in dir(), "
-            "\"Pipeline cell did not define build_preprocessor()\"\n"
+            '"Pipeline cell did not define build_preprocessor()"\n'
             "preproc = build_preprocessor()\n"
             "features = preproc.fit_transform(X)\n"
             "features.shape\n"

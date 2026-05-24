@@ -27,8 +27,7 @@ def synthetic_dataframe(n: int = 5000, seed: int = 42) -> dict[str, list]:
     span_days = (end_date - start_date).days
     signup_offsets = rng.integers(0, span_days + 1, n)
     signup_date = [
-        (start_date + timedelta(days=int(d))).strftime("%Y-%m-%d")
-        for d in signup_offsets
+        (start_date + timedelta(days=int(d))).strftime("%Y-%m-%d") for d in signup_offsets
     ]
     # is_recent: only the most-recent ~30% of users — chosen to coincide with
     # the 70/30 time-ordered split point in temporal analysis, so a model
@@ -95,6 +94,7 @@ def synthetic_dataframe(n: int = 5000, seed: int = 42) -> dict[str, list]:
 
 def write_demo_csv(path: str | Path, n: int = 5000) -> Path:
     import csv
+
     p = Path(path).expanduser().resolve()
     data = synthetic_dataframe(n)
     cols = list(data.keys())

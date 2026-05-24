@@ -1,4 +1,5 @@
 """Finding-level profile diff."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,8 +19,11 @@ class FindingDiffEntry:
     @classmethod
     def from_finding(cls, f: Finding) -> FindingDiffEntry:
         return cls(
-            title=f.title, category=f.category, severity=f.severity,
-            columns=list(f.columns), detail=f.detail,
+            title=f.title,
+            category=f.category,
+            severity=f.severity,
+            columns=list(f.columns),
+            detail=f.detail,
         )
 
 
@@ -56,18 +60,18 @@ class ProfileDiff:
 
     def is_empty(self) -> bool:
         return not (
-            self.appeared or self.resolved or self.severity_changed
-            or self.schema_added or self.schema_removed or self.rank_changed
+            self.appeared
+            or self.resolved
+            or self.severity_changed
+            or self.schema_added
+            or self.schema_removed
+            or self.rank_changed
         )
 
 
 def diff_profiles(a: Profile, b: Profile) -> ProfileDiff:
-    a_by_key: dict[tuple[str, str], Finding] = {
-        _finding_key(f): f for f in a.findings
-    }
-    b_by_key: dict[tuple[str, str], Finding] = {
-        _finding_key(f): f for f in b.findings
-    }
+    a_by_key: dict[tuple[str, str], Finding] = {_finding_key(f): f for f in a.findings}
+    b_by_key: dict[tuple[str, str], Finding] = {_finding_key(f): f for f in b.findings}
     appeared = [FindingDiffEntry.from_finding(f) for k, f in b_by_key.items() if k not in a_by_key]
     resolved = [FindingDiffEntry.from_finding(f) for k, f in a_by_key.items() if k not in b_by_key]
     severity_changed: list[SeverityChange] = []
@@ -76,13 +80,15 @@ def diff_profiles(a: Profile, b: Profile) -> ProfileDiff:
         if fb is None:
             continue
         if fa.severity != fb.severity:
-            severity_changed.append(SeverityChange(
-                title=fb.title,
-                category=fb.category,
-                from_severity=fa.severity,
-                to_severity=fb.severity,
-                columns=list(fb.columns),
-            ))
+            severity_changed.append(
+                SeverityChange(
+                    title=fb.title,
+                    category=fb.category,
+                    from_severity=fa.severity,
+                    to_severity=fb.severity,
+                    columns=list(fb.columns),
+                )
+            )
 
     a_cols = set(a.columns)
     b_cols = set(b.columns)
@@ -96,20 +102,26 @@ def diff_profiles(a: Profile, b: Profile) -> ProfileDiff:
         ar = a_rank.get(feat)
         br = b_rank.get(feat)
         if ar is None or br is None:
-            rank_changed.append(RankChange(
-                feature=feat,
-                from_rank=ar[0] if ar else None,
-                to_rank=br[0] if br else None,
-                from_score=ar[1] if ar else None,
-                to_score=br[1] if br else None,
-            ))
+            rank_changed.append(
+                RankChange(
+                    feature=feat,
+                    from_rank=ar[0] if ar else None,
+                    to_rank=br[0] if br else None,
+                    from_score=ar[1] if ar else None,
+                    to_score=br[1] if br else None,
+                )
+            )
             continue
         if abs(ar[0] - br[0]) >= 3:
-            rank_changed.append(RankChange(
-                feature=feat,
-                from_rank=ar[0], to_rank=br[0],
-                from_score=ar[1], to_score=br[1],
-            ))
+            rank_changed.append(
+                RankChange(
+                    feature=feat,
+                    from_rank=ar[0],
+                    to_rank=br[0],
+                    from_score=ar[1],
+                    to_score=br[1],
+                )
+            )
     rank_changed.sort(
         key=lambda c: abs((c.from_rank or 0) - (c.to_rank or 0)),
         reverse=True,
@@ -140,5 +152,3 @@ def _finding_key(f: Finding) -> tuple[str, str]:
         return (f.category, f"{col}|kind:{f.kind}")
     base = f.title.split("(")[0].rstrip()
     return (f.category, f"{col}|{base}")
-
-

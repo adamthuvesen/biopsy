@@ -191,15 +191,14 @@ def _numeric_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDrift:
     if n_eff > 0:
         drift.ks_pvalue = float(kstwo.sf(ks_stat, max(int(round(n_eff)), 1)))
 
-    drift.wasserstein = float(
-        wasserstein_distance(centers, centers, p_a, p_b)
-    )
+    drift.wasserstein = float(wasserstein_distance(centers, centers, p_a, p_b))
     drift.psi = _psi_from_probs(p_a, p_b)
     return drift
 
 
 def _rebin_to_union(
-    sa: ColumnStats, sb: ColumnStats,
+    sa: ColumnStats,
+    sb: ColumnStats,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """Rebin both histograms onto a common edge grid spanning the union range.
 
@@ -340,8 +339,13 @@ def _target_delta(a: Profile, b: Profile) -> TargetDelta | None:
     sa = a.target_summary
     sb = b.target_summary
     if sa is None or sb is None:
-        return TargetDelta(kind="missing", a_value=None, b_value=None, delta=None,
-                           detail="target summary missing on one side")
+        return TargetDelta(
+            kind="missing",
+            a_value=None,
+            b_value=None,
+            delta=None,
+            detail="target summary missing on one side",
+        )
 
     if sa.kind == "classification" and sb.kind == "classification":
         if sa.positive_rate is not None and sb.positive_rate is not None:
@@ -397,26 +401,38 @@ def _drift_findings(
 ) -> list[Finding]:
     out: list[Finding] = []
     if schema.added:
-        out.append(Finding(
-            severity="info", category="drift",
-            title=f"{len(schema.added)} new column(s) appear in B",
-            detail=", ".join(schema.added[:10]),
-            columns=list(schema.added), score=0.6,
-        ))
+        out.append(
+            Finding(
+                severity="info",
+                category="drift",
+                title=f"{len(schema.added)} new column(s) appear in B",
+                detail=", ".join(schema.added[:10]),
+                columns=list(schema.added),
+                score=0.6,
+            )
+        )
     if schema.removed:
-        out.append(Finding(
-            severity="warning", category="drift",
-            title=f"{len(schema.removed)} column(s) removed in B",
-            detail=", ".join(schema.removed[:10]),
-            columns=list(schema.removed), score=0.7,
-        ))
+        out.append(
+            Finding(
+                severity="warning",
+                category="drift",
+                title=f"{len(schema.removed)} column(s) removed in B",
+                detail=", ".join(schema.removed[:10]),
+                columns=list(schema.removed),
+                score=0.7,
+            )
+        )
     for col, ka, kb in schema.type_changed:
-        out.append(Finding(
-            severity="warning", category="drift",
-            title=f"`{col}` changed type ({ka} → {kb})",
-            detail="Dtype change between A and B — pipelines may break.",
-            columns=[col], score=0.75,
-        ))
+        out.append(
+            Finding(
+                severity="warning",
+                category="drift",
+                title=f"`{col}` changed type ({ka} → {kb})",
+                detail="Dtype change between A and B — pipelines may break.",
+                columns=[col],
+                score=0.75,
+            )
+        )
 
     for d in drifts:
         sev = _drift_severity(d)
@@ -437,12 +453,16 @@ def _drift_findings(
             bits.append(f"null Δ {d.null_rate_delta:+.0%}")
         if not bits:
             continue
-        out.append(Finding(
-            severity=sev, category="drift",
-            title=f"`{d.column}` drifts A → B",
-            detail="; ".join(bits),
-            columns=[d.column], score=d.drift_score,
-        ))
+        out.append(
+            Finding(
+                severity=sev,
+                category="drift",
+                title=f"`{d.column}` drifts A → B",
+                detail="; ".join(bits),
+                columns=[d.column],
+                score=d.drift_score,
+            )
+        )
 
     if target is not None and target.delta is not None:
         sev = "info"
@@ -456,12 +476,16 @@ def _drift_findings(
             sev = "warning" if target.delta < 0.15 else "critical"
         elif target.kind == "regression_mean":
             sev = "info"
-        out.append(Finding(
-            severity=sev, category="drift",
-            title="target distribution shifts",
-            detail=target.detail,
-            columns=[], score=0.85 if sev == "critical" else 0.65,
-        ))
+        out.append(
+            Finding(
+                severity=sev,
+                category="drift",
+                title="target distribution shifts",
+                detail=target.detail,
+                columns=[],
+                score=0.85 if sev == "critical" else 0.65,
+            )
+        )
 
     out.sort(key=lambda f: (f.rank, -f.score))
     return out

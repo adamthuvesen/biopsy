@@ -20,10 +20,7 @@ def test_target_signals_have_new_metrics(tmp_path: Path) -> None:
     )
 
     # numeric features should get a Spearman score.
-    numeric_signals = [
-        s for s in prof.target_signals
-        if prof.columns[s.feature].kind == "numeric"
-    ]
+    numeric_signals = [s for s in prof.target_signals if prof.columns[s.feature].kind == "numeric"]
     spearman_count = sum(1 for s in numeric_signals if s.spearman is not None)
     assert spearman_count >= len(numeric_signals) - 1
 
@@ -75,7 +72,12 @@ def test_target_signal_stratifies_rare_binary_targets(tmp_path: Path) -> None:
     stats = compute_all(src)
     stratified = target_signal(src, stats, "y", max_rows=100, include_permutation=False)
     unstratified = target_signal(
-        src, stats, "y", max_rows=100, include_permutation=False, stratify=False,
+        src,
+        stats,
+        "y",
+        max_rows=100,
+        include_permutation=False,
+        stratify=False,
     )
 
     assert stratified[0].positive_count == 20
@@ -87,6 +89,7 @@ def test_h2_spearman_handles_ties() -> None:
     import numpy as np
 
     from biopsy.correlations import _spearman
+
     # All-tied x against monotone y → no signal
     rho = _spearman(np.array([5.0] * 100), np.arange(100, dtype=float))
     assert rho is None or abs(rho) < 0.01, f"tied input gave rho={rho}"
@@ -188,5 +191,3 @@ def test_target_signal_confidence_low_for_rare_positives(tmp_path: Path) -> None
     # All ranked features must be flagged low-confidence on 10 positives.
     for s in prof.target_signals:
         assert s.confidence == "low"
-
-

@@ -67,7 +67,12 @@ def test_profile_postgres_table() -> None:
     # Schema: 6 columns from the fixture; biopsy may exclude the target
     # from `n_cols` accounting but `columns` should still contain everything.
     assert set(prof.columns) == {
-        "event_id", "user_id", "occurred_at", "amount", "country", "converted",
+        "event_id",
+        "user_id",
+        "occurred_at",
+        "amount",
+        "country",
+        "converted",
     }
     assert prof.target == "converted"
     assert prof.source_uri == EVENTS_URI
@@ -109,7 +114,12 @@ def test_discover_schema_returns_columns_and_estimate() -> None:
     con = duckdb.connect(":memory:")
     schema, est = discover_schema(con, parsed)
     assert set(schema) == {
-        "event_id", "user_id", "occurred_at", "amount", "country", "converted",
+        "event_id",
+        "user_id",
+        "occurred_at",
+        "amount",
+        "country",
+        "converted",
     }
     # reltuples is the planner estimate. After ANALYZE on a 1500-row table
     # it should be within an order of magnitude.
@@ -151,15 +161,11 @@ def test_attached_postgres_rejects_insert() -> None:
     # IOException. Either way, an INSERT against the attached read-only
     # database must fail — that's the contract.
     with pytest.raises(Exception) as exc_info:
-        con.execute(
-            f"INSERT INTO {alias}.biopsy.events "
-            f"VALUES (99999, 1, NOW(), 1.0, 'US', false)"
-        )
+        con.execute(f"INSERT INTO {alias}.biopsy.events VALUES (99999, 1, NOW(), 1.0, 'US', false)")
     msg = str(exc_info.value).lower()
-    assert any(
-        keyword in msg
-        for keyword in ("read-only", "read only", "readonly", "cannot")
-    ), f"expected read-only rejection, got: {exc_info.value}"
+    assert any(keyword in msg for keyword in ("read-only", "read only", "readonly", "cannot")), (
+        f"expected read-only rejection, got: {exc_info.value}"
+    )
 
     if result.cleanup is not None:
         result.cleanup()

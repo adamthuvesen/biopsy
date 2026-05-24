@@ -150,5 +150,3 @@ def test_action_plan_basic(tmp_path: Path) -> None:
     # (No identity guarantee — caching across mutations introduced staleness.)
     again = prof.action_plan()
     assert again.records() == plan.records()
-
-

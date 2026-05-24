@@ -75,5 +75,3 @@ def test_categorical_drift_skips_one_sided_low_top_coverage() -> None:
 
     assert drift.js_divergence is None
     assert drift.chi2_pvalue is None
-
-

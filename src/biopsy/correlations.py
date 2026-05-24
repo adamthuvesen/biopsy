@@ -75,7 +75,7 @@ def pearson_matrix(
     select_parts = []
     keys = []
     for i, a in enumerate(numeric):
-        for b in numeric[i + 1:]:
+        for b in numeric[i + 1 :]:
             select_parts.append(f"corr({_quote(a)}, {_quote(b)})")
             keys.append((a, b))
     if not select_parts:
@@ -138,7 +138,8 @@ def mutual_info_matrix(
     signal). This cuts the O(n²) MI cost on wide datasets.
     """
     eligible = [
-        n for n, s in stats.items()
+        n
+        for n, s in stats.items()
         if not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 50))
     ]
@@ -185,12 +186,17 @@ def mutual_info_matrix(
         try:
             if db:
                 mi = mutual_info_classif(
-                    ea.reshape(-1, 1), eb.astype(int),
-                    discrete_features=[da], random_state=42,
+                    ea.reshape(-1, 1),
+                    eb.astype(int),
+                    discrete_features=[da],
+                    random_state=42,
                 )[0]
             else:
                 mi = mutual_info_regression(
-                    ea.reshape(-1, 1), eb, discrete_features=[da], random_state=42,
+                    ea.reshape(-1, 1),
+                    eb,
+                    discrete_features=[da],
+                    random_state=42,
                 )[0]
         except ValueError:
             # sklearn raises ValueError for degenerate inputs (single sample
@@ -227,16 +233,21 @@ def correlation_pairs(
     priority_features: list[str] | None = None,
 ) -> list[CorrelationPair]:
     pearson = pearson_matrix(
-        src, stats, max_cols=max_cols, priority_features=priority_features,
+        src,
+        stats,
+        max_cols=max_cols,
+        priority_features=priority_features,
     )
     mi = (
         mutual_info_matrix(
-            src, stats,
+            src,
+            stats,
             sample_cache=sample_cache,
             max_cols=max_cols,
             priority_features=priority_features,
         )
-        if include_mutual_info else {}
+        if include_mutual_info
+        else {}
     )
 
     keys = set(pearson) | set(mi)
@@ -251,12 +262,12 @@ def correlation_pairs(
 @dataclass
 class TargetSignal:
     feature: str
-    score: float                        # PPS-style out-of-sample predictive score, [0, 1]
-    mutual_info: float                  # MI-normalized score, [0, 1]
-    method: str                         # "pps_classif" | "pps_regress"
-    spearman: float | None = None       # signed rank correlation, [-1, 1]
-    auc: float | None = None            # AUC lift: normalized 2·|AUC−0.5|, binary only
-    raw_auc: float | None = None        # raw ROC-AUC, binary classif only, [0, 1]
+    score: float  # PPS-style out-of-sample predictive score, [0, 1]
+    mutual_info: float  # MI-normalized score, [0, 1]
+    method: str  # "pps_classif" | "pps_regress"
+    spearman: float | None = None  # signed rank correlation, [-1, 1]
+    auc: float | None = None  # AUC lift: normalized 2·|AUC−0.5|, binary only
+    raw_auc: float | None = None  # raw ROC-AUC, binary classif only, [0, 1]
     perm_importance: float | None = None  # relative multivariate permutation importance
     support: int = 0
     positive_count: int | None = None
@@ -331,7 +342,9 @@ def _pps_classification(
         if split is None:
             scores = cross_val_score(
                 DecisionTreeClassifier(max_depth=4, random_state=42),
-                X, y, cv=cv_folds,
+                X,
+                y,
+                cv=cv_folds,
                 scoring="f1_weighted",
             )
             model_score = float(scores.mean())
@@ -344,9 +357,7 @@ def _pps_classification(
             clf = DecisionTreeClassifier(max_depth=4, random_state=42)
             clf.fit(X[train_idx], y[train_idx])
             preds = clf.predict(X[test_idx])
-            model_score = f1_score(
-                y[test_idx], preds, average="weighted", zero_division=0
-            )
+            model_score = f1_score(y[test_idx], preds, average="weighted", zero_division=0)
             baseline_y = y[test_idx]
             majority_source = y[train_idx]
     except ValueError:
@@ -379,7 +390,10 @@ def _pps_regression(
         if split is None:
             neg_mae = cross_val_score(
                 DecisionTreeRegressor(max_depth=4, random_state=42),
-                X, y, cv=4, scoring="neg_mean_absolute_error",
+                X,
+                y,
+                cv=4,
+                scoring="neg_mean_absolute_error",
             )
             model_mae = -float(neg_mae.mean())
             baseline_y = y
@@ -471,9 +485,7 @@ def _score_feature_vs_target(
             pps_score = _pps_classification(X, y_sub.astype(int))
             method = "pps_classif"
         else:
-            mi = mutual_info_regression(
-                X, y_sub, discrete_features=[x_disc], random_state=42
-            )[0]
+            mi = mutual_info_regression(X, y_sub, discrete_features=[x_disc], random_state=42)[0]
             pps_score = _pps_regression(X, y_sub)
             method = "pps_regress"
     except ValueError:
@@ -482,9 +494,7 @@ def _score_feature_vs_target(
     mi_norm = float(1 - np.exp(-2 * max(mi, 0)))
 
     spearman = None
-    if stats[feat].kind == "numeric" and (
-        target_kind == "regression" or is_binary_target
-    ):
+    if stats[feat].kind == "numeric" and (target_kind == "regression" or is_binary_target):
         spearman = _spearman(x_enc, y_sub.astype(np.float64))
 
     raw_auc = None
@@ -537,7 +547,8 @@ def target_signal(
     target_kind = target_task_kind(t_stats)
 
     features = [
-        n for n, s in stats.items()
+        n
+        for n, s in stats.items()
         if n != target
         and not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 100))
@@ -571,7 +582,14 @@ def target_signal(
     signals: list[TargetSignal] = []
     for j, feat in enumerate(features):
         scored = _score_feature_vs_target(
-            feat, raw, j, stats, y_full, target_mask, target_kind, is_binary_target,
+            feat,
+            raw,
+            j,
+            stats,
+            y_full,
+            target_mask,
+            target_kind,
+            is_binary_target,
         )
         if scored is None:
             continue
@@ -583,7 +601,11 @@ def target_signal(
         # Multivariate permutation importance from a single RF fit on the intersection
         # of rows where every feature is valid. Skipped if too few rows survive.
         _attach_permutation_importance(
-            signals, feat_records, y_full, target_mask, target_kind,
+            signals,
+            feat_records,
+            y_full,
+            target_mask,
+            target_kind,
         )
 
     # If PPS is degenerate across the board (e.g., extreme class imbalance makes
@@ -597,19 +619,20 @@ def target_signal(
 
     if bootstrap > 0 or pps_seeds > 1:
         _attach_uncertainty(
-            signals, feat_records, y_full, target_mask, target_kind, is_binary_target,
-            n_bootstrap=bootstrap, n_pps_seeds=pps_seeds,
+            signals,
+            feat_records,
+            y_full,
+            target_mask,
+            target_kind,
+            is_binary_target,
+            n_bootstrap=bootstrap,
+            n_pps_seeds=pps_seeds,
         )
 
     # leakage heuristic: PPS ≥ 0.85, OR PPS ≥ 0.6 AND >= 2× the next best feature.
     for i, s in enumerate(signals):
-        if (
-            s.score >= 0.85
-            or (
-                s.score >= 0.6
-                and i + 1 < len(signals)
-                and s.score >= 2 * signals[i + 1].score
-            )
+        if s.score >= 0.85 or (
+            s.score >= 0.6 and i + 1 < len(signals) and s.score >= 2 * signals[i + 1].score
         ):
             s.is_leak_suspect = True
     return signals
@@ -704,19 +727,31 @@ def _attach_permutation_importance(
         # class_weight='balanced' helps the model attend to rare classes;
         # AUC scoring is robust to class imbalance for binary targets.
         model = RandomForestClassifier(
-            n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+            n_estimators=80,
+            max_depth=6,
+            random_state=42,
+            n_jobs=-1,
             class_weight="balanced",
         )
         scoring = "roc_auc" if len(np.unique(y)) == 2 else "f1_weighted"
     else:
         model = RandomForestRegressor(
-            n_estimators=80, max_depth=6, random_state=42, n_jobs=-1,
+            n_estimators=80,
+            max_depth=6,
+            random_state=42,
+            n_jobs=-1,
         )
         scoring = "neg_mean_absolute_error"
     try:
         model.fit(X, y)
         result = permutation_importance(
-            model, X, y, n_repeats=5, random_state=42, scoring=scoring, n_jobs=-1,
+            model,
+            X,
+            y,
+            n_repeats=5,
+            random_state=42,
+            scoring=scoring,
+            n_jobs=-1,
         )
     except ValueError:
         # Degenerate inputs (e.g., scoring="roc_auc" on a fold that loses one
@@ -774,13 +809,17 @@ def _attach_uncertainty(
                 try:
                     if target_kind == "classification":
                         mi = mutual_info_classif(
-                            x_b.reshape(-1, 1), y_b.astype(int),
-                            discrete_features=[x_disc], random_state=42,
+                            x_b.reshape(-1, 1),
+                            y_b.astype(int),
+                            discrete_features=[x_disc],
+                            random_state=42,
                         )[0]
                     else:
                         mi = mutual_info_regression(
-                            x_b.reshape(-1, 1), y_b,
-                            discrete_features=[x_disc], random_state=42,
+                            x_b.reshape(-1, 1),
+                            y_b,
+                            discrete_features=[x_disc],
+                            random_state=42,
                         )[0]
                     mis.append(float(1 - np.exp(-2 * max(mi, 0))))
                 except ValueError:

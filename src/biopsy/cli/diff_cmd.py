@@ -27,10 +27,13 @@ def print_diff(console: Console, d: Any) -> None:
     from rich.panel import Panel
     from rich.table import Table
 
-    console.print(Panel(
-        f"[bold]Profile diff[/bold] · {d.a_name} → {d.b_name}",
-        border_style="magenta", padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"[bold]Profile diff[/bold] · {d.a_name} → {d.b_name}",
+            border_style="magenta",
+            padding=(0, 2),
+        )
+    )
     if d.is_empty():
         console.print("[dim]No differences.[/dim]")
         return
@@ -69,8 +72,7 @@ def print_diff(console: Console, d: Any) -> None:
         t.add_column("columns", overflow="fold", style="cyan")
         for sc in d.severity_changed[:15]:
             t.add_row(sc.title, f"{sc.from_severity} → {sc.to_severity}", ", ".join(sc.columns))
-        console.print(Panel(t, title="[bold]Severity change[/bold]",
-                            border_style="bright_black"))
+        console.print(Panel(t, title="[bold]Severity change[/bold]", border_style="bright_black"))
 
     if d.rank_changed:
         t = Table(show_header=True, header_style="bold", border_style="bright_black", expand=True)
@@ -85,5 +87,6 @@ def print_diff(console: Console, d: Any) -> None:
             if rc.from_score is not None and rc.to_score is not None:
                 score_delta = f"{(rc.to_score - rc.from_score):+.2f}"
             t.add_row(rc.feature, str(fr), str(tr), score_delta)
-        console.print(Panel(t, title="[bold]Target-signal rank change[/bold]",
-                            border_style="bright_black"))
+        console.print(
+            Panel(t, title="[bold]Target-signal rank change[/bold]", border_style="bright_black")
+        )

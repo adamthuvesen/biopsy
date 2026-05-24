@@ -24,7 +24,7 @@ from biopsy.io import Source
 from biopsy.matrix import SampleCache, _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
 
-DEFAULT_CUTOFF = 0.30          # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
+DEFAULT_CUTOFF = 0.30  # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
 MIN_CLUSTER_MEMBERS_FOR_DEDUP = 2
 WEAK_REP_PPS_THRESHOLD = 0.05  # if target available
 WEAK_REP_AUC_THRESHOLD = 0.10  # normalized AUC; raw ~0.55
@@ -55,10 +55,10 @@ class ShortlistEntry:
     feature: str
     cluster_id: int
     cluster_size: int
-    score: float          # best target-aware score, [0, 1]
-    score_method: str     # "pps" | "auc" | "mutual_info" | "no_target"
-    is_weak: bool         # flagged as below the weak-rep threshold
-    rationale: str        # human-readable per-pick note
+    score: float  # best target-aware score, [0, 1]
+    score_method: str  # "pps" | "auc" | "mutual_info" | "no_target"
+    is_weak: bool  # flagged as below the weak-rep threshold
+    rationale: str  # human-readable per-pick note
 
 
 @dataclass
@@ -145,12 +145,14 @@ def _build_clusters(
     if n < 2:
         if not feature_names:
             return []
-        return [Cluster(
-            cluster_id=1,
-            members=feature_names,
-            representative=feature_names[0],
-            mean_abs_correlation=1.0,
-        )]
+        return [
+            Cluster(
+                cluster_id=1,
+                members=feature_names,
+                representative=feature_names[0],
+                mean_abs_correlation=1.0,
+            )
+        ]
     condensed = squareform(distance, checks=False)
     Z = linkage(condensed, method="average")
     labels = fcluster(Z, t=cutoff, criterion="distance")
@@ -177,12 +179,14 @@ def _build_clusters(
             mean_corr = float(sub[mask].mean()) if mask.any() else 1.0
         # `representative` is overwritten by _pick_representatives once
         # target signals are available; members[0] is a placeholder.
-        clusters.append(Cluster(
-            cluster_id=len(clusters) + 1,
-            members=members,
-            representative=members[0],
-            mean_abs_correlation=mean_corr,
-        ))
+        clusters.append(
+            Cluster(
+                cluster_id=len(clusters) + 1,
+                members=members,
+                representative=members[0],
+                mean_abs_correlation=mean_corr,
+            )
+        )
     return clusters
 
 
@@ -228,6 +232,7 @@ def _pick_representatives(
                 if s is None or s.is_constant or s.is_near_constant:
                     return -1.0
                 return float(s.n_unique)
+
             best = max(cl.members, key=fallback_score)
         cl.representative = best
 
@@ -270,8 +275,7 @@ def cluster_features(
     max_shortlist: cap shortlist length; None = include all clusters.
     """
     eligible = [
-        n for n, s in stats.items()
-        if s.kind == "numeric" and not s.is_constant and n != target
+        n for n, s in stats.items() if s.kind == "numeric" and not s.is_constant and n != target
     ]
     if len(eligible) < 2:
         return ClusterReport(clusters=[], shortlist=[], cutoff=cutoff, n_features=len(eligible))
@@ -295,15 +299,17 @@ def cluster_features(
         sig = sig_by_feat.get(cl.representative)
         score, method = _score_for_ranking(sig)
         weak = _is_weak(score, method) if sig_by_feat else False
-        entries.append(ShortlistEntry(
-            feature=cl.representative,
-            cluster_id=cl.cluster_id,
-            cluster_size=cl.size,
-            score=score,
-            score_method=method,
-            is_weak=weak,
-            rationale=_rationale(cl, score, method),
-        ))
+        entries.append(
+            ShortlistEntry(
+                feature=cl.representative,
+                cluster_id=cl.cluster_id,
+                cluster_size=cl.size,
+                score=score,
+                score_method=method,
+                is_weak=weak,
+                rationale=_rationale(cl, score, method),
+            )
+        )
     entries.sort(key=lambda e: (-e.score, e.feature))
 
     if max_shortlist is not None:

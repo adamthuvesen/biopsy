@@ -10,11 +10,30 @@ from typing import Any
 
 import typer
 
-CONFIG_KNOWN_KEYS: frozenset[str] = frozenset({
-    "target", "time", "time_col", "exclude", "exclude_file", "ignore_missing_exclude",
-    "filter", "where", "sample", "target_sample", "shortlist", "cluster_cutoff",
-    "html", "save", "plotly_cdn", "fast", "deep", "all_columns", "bins", "max_cols",
-})
+CONFIG_KNOWN_KEYS: frozenset[str] = frozenset(
+    {
+        "target",
+        "time",
+        "time_col",
+        "exclude",
+        "exclude_file",
+        "ignore_missing_exclude",
+        "filter",
+        "where",
+        "sample",
+        "target_sample",
+        "shortlist",
+        "cluster_cutoff",
+        "html",
+        "save",
+        "plotly_cdn",
+        "fast",
+        "deep",
+        "all_columns",
+        "bins",
+        "max_cols",
+    }
+)
 
 
 def load_cli_config(path: Path | None, profile_name: str | None) -> dict[str, Any]:
@@ -53,9 +72,7 @@ def check_config_keys(cfg: dict[str, Any], path: Path, *, where: str) -> None:
             suggestions.append(f"'{k}' (did you mean '{match[0]}'?)")
         else:
             suggestions.append(f"'{k}'")
-    raise typer.BadParameter(
-        f"Unknown config key(s) in {path} {where}: {', '.join(suggestions)}."
-    )
+    raise typer.BadParameter(f"Unknown config key(s) in {path} {where}: {', '.join(suggestions)}.")
 
 
 def fast_from_config(cfg: dict[str, Any]) -> Any:
@@ -170,4 +187,3 @@ def read_exclude_file(path: Path | None) -> list[str]:
         if stripped and not stripped.startswith("#"):
             out.append(stripped)
     return out
-

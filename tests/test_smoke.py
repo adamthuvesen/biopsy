@@ -23,15 +23,11 @@ def test_profile_demo_dataset(tmp_path: Path) -> None:
 
     # days_since_last_login should be a leakage suspect (derived from churn)
     leakage = [
-        f for f in prof.findings
-        if f.category == "leakage" and "days_since_last_login" in f.columns
+        f for f in prof.findings if f.category == "leakage" and "days_since_last_login" in f.columns
     ]
     assert leakage, (
-        "expected leakage flag on days_since_last_login, "
-        f"got {[f.title for f in prof.findings]}"
+        f"expected leakage flag on days_since_last_login, got {[f.title for f in prof.findings]}"
     )
 
     # some target signals should be ranked
     assert len(prof.target_signals) > 0
-
-

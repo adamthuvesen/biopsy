@@ -9,7 +9,9 @@ from biopsy.stats import _quote
 
 
 def _fetch_object_array(
-    con: object, sql: str, columns: list[str],
+    con: object,
+    sql: str,
+    columns: list[str],
 ) -> np.ndarray:
     """Run `sql` and return rows as a 2D object array (cols match `columns`).
 
@@ -62,11 +64,7 @@ class SampleCache:
         # Superset miss at the same max_rows: pull only the missing columns
         # (USING SAMPLE seed=42 is deterministic, so row alignment by position
         # is safe) and hstack onto the cached array instead of re-sampling.
-        if (
-            self._raw is not None
-            and self._max_rows == max_rows
-            and self._raw.shape[0] > 0
-        ):
+        if self._raw is not None and self._max_rows == max_rows and self._raw.shape[0] > 0:
             missing = [c for c in columns if c not in self._columns]
             if missing:
                 quoted_missing = ", ".join(_quote(c) for c in missing)

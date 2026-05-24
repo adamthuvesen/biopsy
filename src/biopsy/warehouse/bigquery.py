@@ -95,7 +95,9 @@ def open_bigquery(
 
 
 def discover_schema(
-    parsed: ParsedURI, *, credentials_env: str | None = None,
+    parsed: ParsedURI,
+    *,
+    credentials_env: str | None = None,
 ) -> tuple[dict[str, str], int | None]:
     """Cheap schema + row-count lookup via INFORMATION_SCHEMA + __TABLES__.
 
@@ -112,8 +114,7 @@ def discover_schema(
     row_count: int | None = None
     try:
         meta_sql = (
-            f"SELECT row_count FROM `{project}.{dataset}.__TABLES__` "
-            f"WHERE table_id = @table_name"
+            f"SELECT row_count FROM `{project}.{dataset}.__TABLES__` WHERE table_id = @table_name"
         )
         from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 
@@ -131,10 +132,7 @@ def discover_schema(
     # `bq_schema` already maps column → BigQuery type. The doctor view
     # benefits from a DuckDB-compatible type string so `kind_of()` returns
     # the right kind (numeric / temporal / text).
-    duckdb_schema = {
-        name: _BQ_TO_DUCKDB_TYPE.get(dt.upper(), dt)
-        for name, dt in bq_schema.items()
-    }
+    duckdb_schema = {name: _BQ_TO_DUCKDB_TYPE.get(dt.upper(), dt) for name, dt in bq_schema.items()}
     return duckdb_schema, row_count
 
 
@@ -180,8 +178,7 @@ def _split_table(parsed: ParsedURI) -> tuple[str, str, str]:
     path = parsed.path.lstrip("/")
     if not path or "." not in path:
         raise ValueError(
-            f"BigQuery URI must be bigquery://project/dataset.table "
-            f"(got {parsed.qualified})"
+            f"BigQuery URI must be bigquery://project/dataset.table (got {parsed.qualified})"
         )
     dataset, table = path.split(".", 1)
     if not project:
@@ -191,14 +188,16 @@ def _split_table(parsed: ParsedURI) -> tuple[str, str, str]:
         project = creds.get("BIGQUERY_PROJECT")
         if not project:
             raise ValueError(
-                "BigQuery URI must specify a project in the host segment, "
-                "or set $BIGQUERY_PROJECT."
+                "BigQuery URI must specify a project in the host segment, or set $BIGQUERY_PROJECT."
             )
     return project, dataset, table
 
 
 def _fetch_schema(
-    client: object, project: str, dataset: str, table: str,
+    client: object,
+    project: str,
+    dataset: str,
+    table: str,
 ) -> dict[str, str]:
     """Return {column_name: bigquery_type} from INFORMATION_SCHEMA.COLUMNS.
 
@@ -226,7 +225,8 @@ def _fetch_schema(
 
 
 def _build_where(
-    expressions: list[str], bq_schema: dict[str, str],
+    expressions: list[str],
+    bq_schema: dict[str, str],
 ) -> str:
     """Parse user `--filter` predicates against the BigQuery schema and
     re-quote identifiers with backticks.
@@ -240,10 +240,7 @@ def _build_where(
         return ""
     from biopsy.io import parse_filter_expr
 
-    duckdb_dtypes = {
-        name: _BQ_TO_DUCKDB_TYPE.get(dt.upper(), dt)
-        for name, dt in bq_schema.items()
-    }
+    duckdb_dtypes = {name: _BQ_TO_DUCKDB_TYPE.get(dt.upper(), dt) for name, dt in bq_schema.items()}
     clauses = [parse_filter_expr(expr, duckdb_dtypes) for expr in expressions]
     backticked = [_swap_quotes_to_backticks(c) for c in clauses]
     return " AND ".join(f"({c})" for c in backticked)
@@ -273,7 +270,7 @@ def _maybe_warn_cost(client: object, sql: str) -> None:
         return
     if bytes_processed is None or bytes_processed < DEFAULT_COST_WARN_BYTES:
         return
-    gb = bytes_processed / (1024 ** 3)
+    gb = bytes_processed / (1024**3)
     print(
         f"biopsy: BigQuery dry-run estimates {gb:.1f} GB scanned. "
         "Consider --sample N or --filter to narrow the scan.",

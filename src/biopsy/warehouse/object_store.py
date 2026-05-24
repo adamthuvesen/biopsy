@@ -48,7 +48,7 @@ def open_object_store(
     # uses the latter as the canonical GCS scheme.
     url = parsed.qualified
     if parsed.scheme == "gs":
-        url = "gcs://" + url[len("gs://"):]
+        url = "gcs://" + url[len("gs://") :]
 
     suffix = url.rsplit(".", 1)[-1].lower()
     if suffix == "parquet":
@@ -61,8 +61,7 @@ def open_object_store(
         scan_sql = f"read_json_auto('{_sql_escape(url)}')"
     else:
         raise ValueError(
-            f"Object-store URL must end in .parquet, .csv, .tsv, or .json; "
-            f"got '{url}'."
+            f"Object-store URL must end in .parquet, .csv, .tsv, or .json; got '{url}'."
         )
 
     return AdapterResult(qualified_name=parsed.qualified, scan_sql=scan_sql)
@@ -138,9 +137,7 @@ def _sql_escape(value: str) -> str:
     return value.replace("'", "''")
 
 
-def discover_schema(
-    con: duckdb.DuckDBPyConnection, parsed: ParsedURI
-) -> dict[str, str]:
+def discover_schema(con: duckdb.DuckDBPyConnection, parsed: ParsedURI) -> dict[str, str]:
     """Cheap schema discovery: read the Parquet footer or first CSV chunk.
 
     Used by `biopsy doctor` against object-store URIs so a 50 GB Parquet
