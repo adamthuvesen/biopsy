@@ -16,8 +16,8 @@ _MAX_WIDTH = 100
 
 SEVERITY_STYLE = {
     "critical": "bold red",
-    "warning":  "bold yellow",
-    "info":     "dim",
+    "warning": "bold yellow",
+    "info": "dim",
 }
 SEVERITY_ICON = {"critical": "■", "warning": "▲", "info": "·"}
 
@@ -47,27 +47,33 @@ def render(
         console.print(_action_plan_block(prof, plan, all_columns=all_columns))
 
     if prof.target_signals:
-        console.print(Rule(
-            f"[bold]Target signal[/bold] [dim]→[/dim] [yellow]{prof.target}[/yellow]",
-            style="bright_black",
-        ))
+        console.print(
+            Rule(
+                f"[bold]Target signal[/bold] [dim]→[/dim] [yellow]{prof.target}[/yellow]",
+                style="bright_black",
+            )
+        )
         console.print(_target_table(prof))
 
     if prof.temporal is not None and prof.temporal.signals:
-        console.print(Rule(
-            f"[bold]Temporal[/bold] [dim]→[/dim] [yellow]{prof.temporal.time_column}[/yellow]",
-            style="bright_black",
-        ))
+        console.print(
+            Rule(
+                f"[bold]Temporal[/bold] [dim]→[/dim] [yellow]{prof.temporal.time_column}[/yellow]",
+                style="bright_black",
+            )
+        )
         console.print(_temporal_table(prof))
     elif prof.temporal is not None and prof.temporal.time_buckets:
         title = (
             "[bold]Temporal buckets[/bold] [dim]→[/dim] "
             f"[yellow]{prof.temporal.time_column}[/yellow]"
         )
-        console.print(Rule(
-            title,
-            style="bright_black",
-        ))
+        console.print(
+            Rule(
+                title,
+                style="bright_black",
+            )
+        )
         console.print(_temporal_buckets_table(prof))
 
     if prof.clusters is not None and prof.clusters.shortlist:
@@ -78,10 +84,12 @@ def render(
             "[bold]Feature shortlist[/bold] "
             f"[dim]· {n_short} of {n_clust} clusters ({cutoff})[/dim]"
         )
-        console.print(Rule(
-            title,
-            style="bright_black",
-        ))
+        console.print(
+            Rule(
+                title,
+                style="bright_black",
+            )
+        )
         console.print(_shortlist_table(prof))
 
     console.print(Rule("[bold]Columns[/bold]", style="bright_black"))
@@ -95,6 +103,7 @@ def render(
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
+
 
 def _header(prof: Profile) -> Text:
     out = Text()
@@ -116,6 +125,7 @@ def _header(prof: Profile) -> Text:
 
 
 # ── Findings ──────────────────────────────────────────────────────────────────
+
 
 def _findings_block(prof: Profile) -> Text:
     out = Text()
@@ -140,14 +150,15 @@ def _findings_block(prof: Profile) -> Text:
 
 # ── Target signal ─────────────────────────────────────────────────────────────
 
+
 def _target_table(prof: Profile) -> Table:
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
     t.add_column("feature", style="cyan", no_wrap=True)
-    t.add_column("pps",  justify="right")
-    t.add_column("mi",   justify="right")
-    t.add_column("ρ",    justify="right")
-    t.add_column("auc",  justify="right")
-    t.add_column("bar",  no_wrap=True)
+    t.add_column("pps", justify="right")
+    t.add_column("mi", justify="right")
+    t.add_column("ρ", justify="right")
+    t.add_column("auc", justify="right")
+    t.add_column("bar", no_wrap=True)
     t.add_column("note", style="dim", min_width=14)
 
     for s in prof.target_signals[:15]:
@@ -170,15 +181,16 @@ def _target_table(prof: Profile) -> Table:
 
 # ── Temporal ──────────────────────────────────────────────────────────────────
 
+
 def _temporal_table(prof: Profile) -> Table:
     report = prof.temporal
     assert report is not None
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
-    t.add_column("feature",      style="cyan", no_wrap=True)
-    t.add_column("random→time",  justify="right")
-    t.add_column("drift",        justify="right")
+    t.add_column("feature", style="cyan", no_wrap=True)
+    t.add_column("random→time", justify="right")
+    t.add_column("drift", justify="right")
     t.add_column("monotonicity", justify="right")
-    t.add_column("note",         overflow="fold")
+    t.add_column("note", overflow="fold")
 
     sev_order = {"critical": 0, "warning": 1, "info": 2, "none": 3}
     sorted_signals = sorted(
@@ -189,14 +201,16 @@ def _temporal_table(prof: Profile) -> Table:
         if s.severity == "none":
             continue
         if s.random_pps is not None and s.time_pps is not None:
-            gap_color = "red" if s.severity == "critical" else (
-                "yellow" if s.severity == "warning" else "dim"
+            gap_color = (
+                "red"
+                if s.severity == "critical"
+                else ("yellow" if s.severity == "warning" else "dim")
             )
             split = f"[{gap_color}]{s.random_pps:.2f} → {s.time_pps:.2f}[/]"
         else:
             split = "—"
         drift = f"{s.drift_ks:.2f}" if s.drift_ks is not None else "—"
-        mono  = f"{s.time_monotonicity:.2f}" if s.time_monotonicity is not None else "—"
+        mono = f"{s.time_monotonicity:.2f}" if s.time_monotonicity is not None else "—"
         sev_color = {"critical": "red", "warning": "yellow", "info": "cyan"}.get(
             s.severity, "white"
         )
@@ -208,9 +222,9 @@ def _temporal_buckets_table(prof: Profile) -> Table:
     report = prof.temporal
     assert report is not None
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
-    t.add_column("time",             style="cyan")
-    t.add_column("rows",             justify="right")
-    t.add_column("target n",         justify="right")
+    t.add_column("time", style="cyan")
+    t.add_column("rows", justify="right")
+    t.add_column("target n", justify="right")
     t.add_column("target rate/mean", justify="right")
 
     for b in report.time_buckets:
@@ -231,16 +245,17 @@ def _temporal_buckets_table(prof: Profile) -> Table:
 
 # ── Feature shortlist ─────────────────────────────────────────────────────────
 
+
 def _shortlist_table(prof: Profile) -> Table:
     rep = prof.clusters
     assert rep is not None
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
-    t.add_column("#",       justify="right", style="dim", width=3)
+    t.add_column("#", justify="right", style="dim", width=3)
     t.add_column("feature", style="cyan", no_wrap=True)
     t.add_column("cluster", justify="right", style="dim")
-    t.add_column("size",    justify="right", style="dim")
-    t.add_column("score",   justify="right")
-    t.add_column("method",  style="dim")
+    t.add_column("size", justify="right", style="dim")
+    t.add_column("score", justify="right")
+    t.add_column("method", style="dim")
 
     for i, entry in enumerate(rep.shortlist[:30], 1):
         feat = entry.feature
@@ -261,14 +276,15 @@ def _shortlist_table(prof: Profile) -> Table:
 
 # ── Columns ───────────────────────────────────────────────────────────────────
 
+
 def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Table:
     t = Table(box=_BOX, show_header=True, header_style="bold", expand=True, padding=(0, 1))
-    t.add_column("column",            style="cyan", no_wrap=True)
-    t.add_column("type",              style="dim")
-    t.add_column("null",              justify="right")
-    t.add_column("unique",            justify="right")
+    t.add_column("column", style="cyan", no_wrap=True)
+    t.add_column("type", style="dim")
+    t.add_column("null", justify="right")
+    t.add_column("unique", justify="right")
     t.add_column("distribution / top", overflow="fold", min_width=16)
-    t.add_column("summary",           overflow="fold")
+    t.add_column("summary", overflow="fold")
 
     columns = list(prof.columns.values()) if all_columns else _selected_columns(prof, max_columns)
     for s in columns:
@@ -279,16 +295,16 @@ def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Tab
             null_str = f"[yellow]{null_str}[/yellow]"
 
         if s.kind == "numeric":
-            spark   = _spark_for(s, width=16)
+            spark = _spark_for(s, width=16)
             summary = _numeric_summary(s)
         elif s.kind in {"text", "bool"}:
-            spark   = _categorical_preview(s)
+            spark = _categorical_preview(s)
             summary = _cat_summary(s)
         elif s.kind == "temporal":
-            spark   = _temporal_preview(s)
+            spark = _temporal_preview(s)
             summary = ""
         else:
-            spark   = ""
+            spark = ""
             summary = s.dtype
 
         t.add_row(s.name, s.dtype.lower(), null_str, f"{s.n_unique:,}", spark, summary)
@@ -327,19 +343,20 @@ def _selected_columns(prof: Profile, max_columns: int) -> list[ColumnStats]:
 
 # ── Correlations ──────────────────────────────────────────────────────────────
 
+
 def _correlations_table(prof: Profile) -> Table:
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
-    t.add_column("a",           style="cyan", no_wrap=True)
-    t.add_column("b",           style="cyan", no_wrap=True)
-    t.add_column("pearson",     justify="right")
+    t.add_column("a", style="cyan", no_wrap=True)
+    t.add_column("b", style="cyan", no_wrap=True)
+    t.add_column("pearson", justify="right")
     t.add_column("mutual info", justify="right")
-    t.add_column("kind",        style="dim")
+    t.add_column("kind", style="dim")
 
     for p in prof.correlations[:12]:
         if p.score < 0.3:
             break
-        r    = f"{p.pearson:+.2f}" if p.pearson is not None else "—"
-        mi   = f"{p.mutual_info:.2f}" if p.mutual_info is not None else "—"
+        r = f"{p.pearson:+.2f}" if p.pearson is not None else "—"
+        mi = f"{p.mutual_info:.2f}" if p.mutual_info is not None else "—"
         kind = "[magenta]non-linear[/magenta]" if p.is_nonlinear else "linear"
         t.add_row(p.a, p.b, r, mi, kind)
     return t
@@ -347,10 +364,17 @@ def _correlations_table(prof: Profile) -> Table:
 
 # ── Action plan ───────────────────────────────────────────────────────────────
 
+
 def _action_plan_has_content(plan) -> bool:
     return bool(
-        plan.drop or plan.transform or plan.impute or plan.encode or plan.review
-        or plan.split or plan.cv or plan.class_strategy
+        plan.drop
+        or plan.transform
+        or plan.impute
+        or plan.encode
+        or plan.review
+        or plan.split
+        or plan.cv
+        or plan.class_strategy
     )
 
 
@@ -358,25 +382,25 @@ def _action_plan_block(prof: Profile, plan, *, all_columns: bool) -> Group:
     limit = None if all_columns else 6
 
     t = Table(box=_BOX, show_header=True, header_style="bold", padding=(0, 1))
-    t.add_column("type",   style="dim",  no_wrap=True, width=10)
+    t.add_column("type", style="dim", no_wrap=True, width=10)
     t.add_column("column", style="cyan", no_wrap=True)
     t.add_column("action")
     t.add_column("reason", overflow="fold")
 
     _ACTION_STYLE = {
-        "drop":      "red",
+        "drop": "red",
         "transform": "yellow",
-        "impute":    "cyan",
-        "encode":    "magenta",
-        "review":    "yellow",
+        "impute": "cyan",
+        "encode": "magenta",
+        "review": "yellow",
     }
 
     sections = [
-        ("drop",      plan.drop),
+        ("drop", plan.drop),
         ("transform", plan.transform),
-        ("impute",    plan.impute),
-        ("encode",    plan.encode),
-        ("review",    plan.review),
+        ("impute", plan.impute),
+        ("encode", plan.encode),
+        ("review", plan.review),
     ]
     total_truncated = 0
     for section_name, items in sections:
@@ -413,6 +437,7 @@ def _action_plan_block(prof: Profile, plan, *, all_columns: bool) -> Group:
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 
+
 def _footer(prof: Profile) -> Text:
     return Text(
         f"\nProfiled {prof.n_rows:,} rows × {prof.n_cols} cols in {prof.elapsed_seconds:.2f}s",
@@ -421,6 +446,7 @@ def _footer(prof: Profile) -> Text:
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
+
 
 def _spark_for(s: ColumnStats, width: int = 16) -> str:
     counts = [c for _lo, _hi, c in s.histogram]

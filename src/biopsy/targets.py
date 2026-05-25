@@ -12,10 +12,7 @@ TargetTaskKind = Literal["classification", "regression"]
 
 def target_task_kind(stats: ColumnStats) -> TargetTaskKind:
     """Whether modeling should treat the target as classification or regression."""
-    if (
-        stats.kind in {"text", "bool"}
-        or (stats.kind == "numeric" and stats.n_unique <= 20)
-    ):
+    if stats.kind in {"text", "bool"} or (stats.kind == "numeric" and stats.n_unique <= 20):
         return "classification"
     return "regression"
 

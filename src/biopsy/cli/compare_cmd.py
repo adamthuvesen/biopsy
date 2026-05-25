@@ -42,9 +42,7 @@ def compare_cmd(
         False, "--plotly-cdn", help="Use Plotly from CDN instead of embedding."
     ),
     open_browser: bool = typer.Option(False, "--open", help="Open the HTML report."),
-    progress: bool = typer.Option(
-        True, "--progress/--no-progress", help="Print profiling phases."
-    ),
+    progress: bool = typer.Option(True, "--progress/--no-progress", help="Print profiling phases."),
 ) -> None:
     """Drift report comparing two datasets (or two saved profiles)."""
     from biopsy.compare import compare_profiles
@@ -92,8 +90,10 @@ def compare_cmd(
     if html or open_browser:
         a_stem = Path(prof_a.source_name).stem or "a"
         b_stem = Path(prof_b.source_name).stem or "b"
-        out = html if html is not None else (
-            Path(tempfile.gettempdir()) / f"biopsy-compare-{a_stem}-{b_stem}.html"
+        out = (
+            html
+            if html is not None
+            else (Path(tempfile.gettempdir()) / f"biopsy-compare-{a_stem}-{b_stem}.html")
         )
         rendered = render_compare(prof_a, prof_b, report, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
@@ -222,13 +222,15 @@ def print_compare(console: Console, report: Any) -> None:
     console.print(Panel(t, title="[bold]Top drift[/bold]", border_style="bright_black"))
 
     if report.findings:
-        f_table = Table(show_header=True, header_style="bold", border_style="bright_black",
-                        expand=True)
+        f_table = Table(
+            show_header=True, header_style="bold", border_style="bright_black", expand=True
+        )
         f_table.add_column("severity", style="dim")
         f_table.add_column("title")
         f_table.add_column("detail", overflow="fold")
         for f in report.findings[:12]:
             color = {"critical": "red", "warning": "yellow", "info": "cyan"}[f.severity]
             f_table.add_row(f"[{color}]{f.severity}[/{color}]", f.title, f.detail)
-        console.print(Panel(f_table, title="[bold]Drift findings[/bold]",
-                            border_style="bright_black"))
+        console.print(
+            Panel(f_table, title="[bold]Drift findings[/bold]", border_style="bright_black")
+        )

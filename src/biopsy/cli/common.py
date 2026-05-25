@@ -26,7 +26,9 @@ def clean_exit_on_user_error(exc: Exception) -> None:
 
 
 def maybe_warn_warehouse_sample(
-    progress_console: Console, path: str, sample: int | None,
+    progress_console: Console,
+    path: str,
+    sample: int | None,
 ) -> None:
     """Print a one-shot stderr warning if `--sample` is used against a URI."""
     if sample is None or "://" not in path:

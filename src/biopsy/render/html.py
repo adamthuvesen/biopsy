@@ -30,20 +30,20 @@ from biopsy.temporal import TemporalReport, TemporalSignal
 # --- palette (forensic editorial) ------------------------------------------
 # Warm paper, deep stone ink, oxblood accent. Severity colors stay vivid.
 
-INK = "#1C1917"        # stone-900 — primary text
-INK_2 = "#44403C"      # stone-700
-INK_3 = "#78716C"      # stone-500
-INK_4 = "#A8A29E"      # stone-400 (faint labels)
-SURFACE = "#F7F3EB"    # warm cream paper
+INK = "#1C1917"  # stone-900 — primary text
+INK_2 = "#44403C"  # stone-700
+INK_3 = "#78716C"  # stone-500
+INK_4 = "#A8A29E"  # stone-400 (faint labels)
+SURFACE = "#F7F3EB"  # warm cream paper
 SURFACE_2 = "#EFEAE0"  # paper shadow
-LINE = "#E5DDD0"       # hairline rule
-LINE_2 = "#D6CDBC"     # stronger rule
-ACCENT = "#7C2D12"     # oxblood — primary accent
+LINE = "#E5DDD0"  # hairline rule
+LINE_2 = "#D6CDBC"  # stronger rule
+ACCENT = "#7C2D12"  # oxblood — primary accent
 ACCENT_SOFT = "#FBEEE6"
 ACCENT_DEEP = "#431407"
-WARN = "#A16207"       # muted ochre
-CRIT = "#9F1239"       # rose-800
-OK = "#166534"         # forest
+WARN = "#A16207"  # muted ochre
+CRIT = "#9F1239"  # rose-800
+OK = "#166534"  # forest
 
 # Dark mode tokens (resolved client-side via CSS vars, but used here for charts).
 DARK_INK = "#F5F0E6"
@@ -52,11 +52,20 @@ DARK_LINE = "#3A332C"
 
 
 _BASE_PALETTE: dict[str, str] = {
-    "ink": INK, "ink_2": INK_2, "ink_3": INK_3, "ink_4": INK_4,
-    "surface": SURFACE, "surface_2": SURFACE_2,
-    "line": LINE, "line_2": LINE_2,
-    "accent": ACCENT, "accent_soft": ACCENT_SOFT, "accent_deep": ACCENT_DEEP,
-    "warn": WARN, "crit": CRIT, "ok": OK,
+    "ink": INK,
+    "ink_2": INK_2,
+    "ink_3": INK_3,
+    "ink_4": INK_4,
+    "surface": SURFACE,
+    "surface_2": SURFACE_2,
+    "line": LINE,
+    "line_2": LINE_2,
+    "accent": ACCENT,
+    "accent_soft": ACCENT_SOFT,
+    "accent_deep": ACCENT_DEEP,
+    "warn": WARN,
+    "crit": CRIT,
+    "ok": OK,
 }
 
 
@@ -65,8 +74,11 @@ def _palette(*, include_dark: bool) -> dict[str, str]:
         return dict(_BASE_PALETTE)
     return {
         **_BASE_PALETTE,
-        "dark_ink": DARK_INK, "dark_surface": DARK_SURFACE, "dark_line": DARK_LINE,
+        "dark_ink": DARK_INK,
+        "dark_surface": DARK_SURFACE,
+        "dark_line": DARK_LINE,
     }
+
 
 SEVERITY_COLOR = {"critical": CRIT, "warning": WARN, "info": INK_2}
 
@@ -99,19 +111,26 @@ def _ensure_template() -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=40, r=20, t=30, b=40),
             xaxis=dict(
-                showgrid=False, showline=True, linecolor=LINE_2,
-                ticks="outside", tickcolor=LINE_2,
+                showgrid=False,
+                showline=True,
+                linecolor=LINE_2,
+                ticks="outside",
+                tickcolor=LINE_2,
                 tickfont=dict(color=INK_3, size=11),
                 zeroline=False,
             ),
             yaxis=dict(
-                showgrid=True, gridcolor=LINE, gridwidth=1,
-                showline=False, zeroline=False,
+                showgrid=True,
+                gridcolor=LINE,
+                gridwidth=1,
+                showline=False,
+                zeroline=False,
                 tickfont=dict(color=INK_3, size=11),
             ),
             colorway=COLORWAY,
             hoverlabel=dict(
-                bgcolor=SURFACE, bordercolor=LINE_2,
+                bgcolor=SURFACE,
+                bordercolor=LINE_2,
                 font=dict(color=INK, family="'JetBrains Mono', ui-monospace, monospace"),
             ),
         )
@@ -119,6 +138,7 @@ def _ensure_template() -> None:
 
 
 # --- chart builders --------------------------------------------------------
+
 
 def _hist_unpack(
     histogram: list[tuple[float, float, int]],
@@ -136,7 +156,9 @@ def _histogram_fig(s: ColumnStats) -> str:
 
     fig = go.Figure()
     fig.add_bar(
-        x=centers, y=counts, width=widths,
+        x=centers,
+        y=counts,
+        width=widths,
         marker=dict(color=ACCENT, line=dict(width=0)),
         opacity=0.92,
         hovertemplate="<b>%{x:.4g}</b><br>count: %{y:,}<extra></extra>",
@@ -153,18 +175,24 @@ def _histogram_fig(s: ColumnStats) -> str:
         show_label = last_labeled_x is None or (q - last_labeled_x) >= min_gap
         if show_label:
             fig.add_vline(
-                x=q, line_width=1, line_dash="dot", line_color=INK_3,
-                annotation_text=label, annotation_position="top",
+                x=q,
+                line_width=1,
+                line_dash="dot",
+                line_color=INK_3,
+                annotation_text=label,
+                annotation_position="top",
                 annotation_font=dict(size=9, color=INK_3),
             )
             last_labeled_x = q
         else:
             fig.add_vline(x=q, line_width=1, line_dash="dot", line_color=INK_3)
     fig.update_layout(
-        template="biopsy", height=180,
+        template="biopsy",
+        height=180,
         margin=dict(l=30, r=10, t=18, b=28),
         showlegend=False,
-        xaxis_title=None, yaxis_title=None,
+        xaxis_title=None,
+        yaxis_title=None,
     )
     return _div(fig)
 
@@ -177,16 +205,19 @@ def _temporal_column_fig(s: ColumnStats) -> str:
 
     fig = go.Figure()
     fig.add_bar(
-        x=labels, y=counts,
+        x=labels,
+        y=counts,
         marker=dict(color=ACCENT, line=dict(width=0)),
         opacity=0.92,
         hovertemplate="<b>%{x}</b><br>rows: %{y:,}<extra></extra>",
     )
     fig.update_layout(
-        template="biopsy", height=180,
+        template="biopsy",
+        height=180,
         margin=dict(l=30, r=10, t=18, b=38),
         showlegend=False,
-        xaxis_title=None, yaxis_title=None,
+        xaxis_title=None,
+        yaxis_title=None,
     )
     if len(labels) > 18:
         fig.update_xaxes(nticks=10, tickangle=-30)
@@ -203,7 +234,9 @@ def _bar_fig(s: ColumnStats) -> str:
 
     fig = go.Figure()
     fig.add_bar(
-        x=counts, y=labels, orientation="h",
+        x=counts,
+        y=labels,
+        orientation="h",
         marker=dict(color=ACCENT, line=dict(width=0)),
         opacity=0.92,
         hovertemplate="<b>%{y}</b><br>count: %{x:,}<extra></extra>",
@@ -213,7 +246,8 @@ def _bar_fig(s: ColumnStats) -> str:
         height=max(170, 22 * len(labels) + 50),
         margin=dict(l=120, r=20, t=8, b=28),
         showlegend=False,
-        xaxis_title=None, yaxis_title=None,
+        xaxis_title=None,
+        yaxis_title=None,
     )
     fig.update_yaxes(automargin=True)
     return _div(fig)
@@ -229,7 +263,9 @@ def _target_fig(signals: list[TargetSignal], target: str) -> str:
 
     fig = go.Figure()
     fig.add_bar(
-        x=scores, y=labels, orientation="h",
+        x=scores,
+        y=labels,
+        orientation="h",
         marker=dict(color=colors, line=dict(width=0)),
         opacity=0.94,
         hovertemplate="<b>%{y}</b><br>score: %{x:.3f}<extra></extra>",
@@ -256,17 +292,15 @@ def _shortlist_fig(shortlist: list) -> str:
 
     # weak → ochre, multi-member cluster → indigo, singleton → oxblood
     colors = [
-        WARN if w else (ACCENT if sz == 1 else "#1E3A8A")
-        for w, sz in zip(weak, sizes, strict=True)
+        WARN if w else (ACCENT if sz == 1 else "#1E3A8A") for w, sz in zip(weak, sizes, strict=True)
     ]
-    hover_text = [
-        f"cluster c{e.cluster_id} (size {e.cluster_size})"
-        for e in entries
-    ]
+    hover_text = [f"cluster c{e.cluster_id} (size {e.cluster_size})" for e in entries]
 
     fig = go.Figure()
     fig.add_bar(
-        x=scores, y=labels, orientation="h",
+        x=scores,
+        y=labels,
+        orientation="h",
         marker=dict(color=colors, line=dict(width=0)),
         opacity=0.94,
         hovertemplate="<b>%{y}</b><br>score: %{x:.3f}<br>%{customdata}<extra></extra>",
@@ -333,18 +367,28 @@ def _temporal_fig(report: TemporalReport) -> str:
             tickvals=[-1, -0.5, 0, 0.5, 1],
             ticktext=["1.0", "0.5", "0", "0.5", "1.0"],
             range=[-1.05, 1.05],
-            zeroline=True, zerolinecolor=INK_3, zerolinewidth=1,
+            zeroline=True,
+            zerolinecolor=INK_3,
+            zerolinewidth=1,
         ),
     )
     fig.update_yaxes(automargin=True)
     fig.add_annotation(
-        x=-0.5, y=1.14, xref="x", yref="paper",
-        text="← time-ordered", showarrow=False,
+        x=-0.5,
+        y=1.14,
+        xref="x",
+        yref="paper",
+        text="← time-ordered",
+        showarrow=False,
         font=dict(size=11, color=INK_3, family="'Instrument Serif', serif"),
     )
     fig.add_annotation(
-        x=0.5, y=1.14, xref="x", yref="paper",
-        text="random CV →", showarrow=False,
+        x=0.5,
+        y=1.14,
+        xref="x",
+        yref="paper",
+        text="random CV →",
+        showarrow=False,
         font=dict(size=11, color=INK_3, family="'Instrument Serif', serif"),
     )
     return _div(fig)
@@ -393,21 +437,31 @@ def _heatmap_fig(
     if kind == "pearson":
         # diverging: indigo → cream → oxblood
         colorscale = [
-            [0, "#1E3A8A"], [0.25, "#93C5FD"], [0.5, SURFACE],
-            [0.75, "#E7B4A3"], [1, ACCENT_DEEP],
+            [0, "#1E3A8A"],
+            [0.25, "#93C5FD"],
+            [0.5, SURFACE],
+            [0.75, "#E7B4A3"],
+            [1, ACCENT_DEEP],
         ]
         zmin, zmax = -1, 1
     else:
         colorscale = [[0, SURFACE], [0.5, "#D6BB7E"], [1, ACCENT_DEEP]]
         zmin, zmax = 0, 1
 
-    fig = go.Figure(data=go.Heatmap(
-        z=m, x=numeric, y=numeric,
-        colorscale=colorscale, zmin=zmin, zmax=zmax,
-        xgap=2, ygap=2,
-        hovertemplate="<b>%{y}</b> ↔ <b>%{x}</b><br>%{z:.3f}<extra></extra>",
-        colorbar=dict(thickness=8, len=0.6, outlinewidth=0, tickfont=dict(size=10)),
-    ))
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=m,
+            x=numeric,
+            y=numeric,
+            colorscale=colorscale,
+            zmin=zmin,
+            zmax=zmax,
+            xgap=2,
+            ygap=2,
+            hovertemplate="<b>%{y}</b> ↔ <b>%{x}</b><br>%{z:.3f}<extra></extra>",
+            colorbar=dict(thickness=8, len=0.6, outlinewidth=0, tickfont=dict(size=10)),
+        )
+    )
     fig.update_layout(
         template="biopsy",
         height=max(360, 28 * n + 80),
@@ -436,7 +490,9 @@ def _target_prevalence_fig(class_counts: list[tuple[str, int]]) -> str:
 
     fig = go.Figure()
     fig.add_bar(
-        x=counts, y=labels, orientation="h",
+        x=counts,
+        y=labels,
+        orientation="h",
         marker=dict(color=ACCENT, line=dict(width=0)),
         opacity=0.94,
         text=[f"{p:.1%}" for p in pcts],
@@ -458,7 +514,9 @@ def _target_prevalence_fig(class_counts: list[tuple[str, int]]) -> str:
 
 def _div(fig: go.Figure) -> str:
     return pio.to_html(
-        fig, include_plotlyjs=False, full_html=False,
+        fig,
+        include_plotlyjs=False,
+        full_html=False,
         config={"displayModeBar": False, "responsive": True},
     )
 
@@ -494,6 +552,7 @@ def _quality_score(prof: Profile) -> tuple[int, str]:
 
 # --- template binding ------------------------------------------------------
 
+
 def _build_report_context(
     prof: Profile,
     *,
@@ -502,21 +561,21 @@ def _build_report_context(
     """Assemble Jinja context for the main profile report."""
     columns_payload = []
     for s in prof.columns.values():
-        columns_payload.append({
-            "stats": s,
-            "chart": column_chart_html(s),
-            "is_target": s.name == prof.target,
-            "is_time": s.name == prof.time_column,
-        })
+        columns_payload.append(
+            {
+                "stats": s,
+                "chart": column_chart_html(s),
+                "is_target": s.name == prof.target,
+                "is_time": s.name == prof.time_column,
+            }
+        )
 
     target_chart = ""
     target_prevalence_chart = ""
     if prof.target_signals:
         target_chart = _target_fig(prof.target_signals, prof.target or "")
     if prof.target_summary and prof.target_summary.class_counts:
-        target_prevalence_chart = _target_prevalence_fig(
-            prof.target_summary.class_counts
-        )
+        target_prevalence_chart = _target_prevalence_fig(prof.target_summary.class_counts)
 
     temporal_chart = ""
     temporal_signals = []
@@ -547,10 +606,16 @@ def _build_report_context(
         ]
 
     pearson_heatmap = _heatmap_fig(
-        prof.correlations, prof.columns, "pearson", max_features=heatmap_limit,
+        prof.correlations,
+        prof.columns,
+        "pearson",
+        max_features=heatmap_limit,
     )
     mi_heatmap = _heatmap_fig(
-        prof.correlations, prof.columns, "mutual_info", max_features=heatmap_limit,
+        prof.correlations,
+        prof.columns,
+        "mutual_info",
+        max_features=heatmap_limit,
     )
 
     action_plan = prof.action_plan()
@@ -565,16 +630,17 @@ def _build_report_context(
                 continue
             chart = column_chart_html(stats)
             top_corrs = [
-                p for p in prof.correlations
-                if entry.feature in (p.a, p.b) and p.score >= 0.3
+                p for p in prof.correlations if entry.feature in (p.a, p.b) and p.score >= 0.3
             ][:5]
-            drilldown_cards.append({
-                "entry": entry,
-                "stats": stats,
-                "chart": Markup(chart),
-                "signal": sigs_by_feat.get(entry.feature),
-                "top_corrs": top_corrs,
-            })
+            drilldown_cards.append(
+                {
+                    "entry": entry,
+                    "stats": stats,
+                    "chart": Markup(chart),
+                    "signal": sigs_by_feat.get(entry.feature),
+                    "top_corrs": top_corrs,
+                }
+            )
     quality_score, verdict = _quality_score(prof)
 
     # Severity tallies for the vital signs ribbon.
@@ -669,8 +735,10 @@ def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
         fig.add_bar(x=x_a, y=y_a, name="A", marker=dict(color=ACCENT), opacity=0.55)
         fig.add_bar(x=x_b, y=y_b, name="B", marker=dict(color="#1E3A8A"), opacity=0.55)
         fig.update_layout(
-            template="biopsy", barmode="overlay",
-            autosize=True, height=180,
+            template="biopsy",
+            barmode="overlay",
+            autosize=True,
+            height=180,
             margin=dict(l=40, r=20, t=10, b=24),
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
@@ -687,16 +755,22 @@ def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
             return ""
         fig = go.Figure()
         fig.add_bar(
-            x=labels, y=[a_counts.get(k, 0) for k in labels],
-            name="A", marker=dict(color=ACCENT),
+            x=labels,
+            y=[a_counts.get(k, 0) for k in labels],
+            name="A",
+            marker=dict(color=ACCENT),
         )
         fig.add_bar(
-            x=labels, y=[b_counts.get(k, 0) for k in labels],
-            name="B", marker=dict(color="#1E3A8A"),
+            x=labels,
+            y=[b_counts.get(k, 0) for k in labels],
+            name="B",
+            marker=dict(color="#1E3A8A"),
         )
         fig.update_layout(
-            template="biopsy", barmode="group",
-            autosize=True, height=180,
+            template="biopsy",
+            barmode="group",
+            autosize=True,
+            height=180,
             margin=dict(l=40, r=20, t=10, b=24),
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
@@ -737,12 +811,14 @@ def render_compare(
         sb = prof_b.columns.get(d.column)
         if sa is None or sb is None:
             continue
-        feature_cards.append({
-            "drift": d,
-            "chart": Markup(_compare_feature_fig(sa, sb)),
-            "stats_a": sa,
-            "stats_b": sb,
-        })
+        feature_cards.append(
+            {
+                "drift": d,
+                "chart": Markup(_compare_feature_fig(sa, sb)),
+                "stats_a": sa,
+                "stats_b": sb,
+            }
+        )
     html = tpl.render(
         a=prof_a,
         b=prof_b,

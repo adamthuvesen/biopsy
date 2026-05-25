@@ -60,7 +60,8 @@ def test_missing_google_application_credentials_raises(
 
 
 def test_invalid_credentials_path_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     """GOOGLE_APPLICATION_CREDENTIALS pointing nowhere fails clearly."""
     pytest.importorskip("google.cloud.bigquery")

@@ -25,18 +25,19 @@ WAREHOUSE_DIR = Path(__file__).resolve().parent.parent / "src" / "biopsy" / "war
 # Each pattern matches a remote-side mutation. Anchored on word boundary +
 # the second keyword so a docstring mentioning the bare verb doesn't fire.
 FORBIDDEN_PATTERNS: dict[str, re.Pattern[str]] = {
-    "INSERT INTO":              re.compile(r"\bINSERT\s+INTO\b", re.IGNORECASE),
-    "INSERT VALUES":            re.compile(r"\bINSERT\s+\(", re.IGNORECASE),
-    "UPDATE SET":               re.compile(r"\bUPDATE\s+\w+\s+SET\b", re.IGNORECASE),
-    "DELETE FROM":              re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE),
-    "MERGE INTO":               re.compile(r"\bMERGE\s+INTO\b", re.IGNORECASE),
-    "TRUNCATE":                 re.compile(r"\bTRUNCATE\b", re.IGNORECASE),
-    "DROP TABLE/SCHEMA/etc":    re.compile(
-        r"\bDROP\s+(TABLE|SCHEMA|DATABASE|VIEW)\b", re.IGNORECASE,
+    "INSERT INTO": re.compile(r"\bINSERT\s+INTO\b", re.IGNORECASE),
+    "INSERT VALUES": re.compile(r"\bINSERT\s+\(", re.IGNORECASE),
+    "UPDATE SET": re.compile(r"\bUPDATE\s+\w+\s+SET\b", re.IGNORECASE),
+    "DELETE FROM": re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE),
+    "MERGE INTO": re.compile(r"\bMERGE\s+INTO\b", re.IGNORECASE),
+    "TRUNCATE": re.compile(r"\bTRUNCATE\b", re.IGNORECASE),
+    "DROP TABLE/SCHEMA/etc": re.compile(
+        r"\bDROP\s+(TABLE|SCHEMA|DATABASE|VIEW)\b",
+        re.IGNORECASE,
     ),
-    "ALTER TABLE":              re.compile(r"\bALTER\s+TABLE\b", re.IGNORECASE),
-    "CREATE TABLE":             re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE),
-    "CREATE OR REPLACE TABLE":  re.compile(r"\bCREATE\s+OR\s+REPLACE\s+TABLE\b", re.IGNORECASE),
+    "ALTER TABLE": re.compile(r"\bALTER\s+TABLE\b", re.IGNORECASE),
+    "CREATE TABLE": re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE),
+    "CREATE OR REPLACE TABLE": re.compile(r"\bCREATE\s+OR\s+REPLACE\s+TABLE\b", re.IGNORECASE),
 }
 
 
@@ -74,8 +75,7 @@ def test_no_remote_mutation_tokens(py_file: Path) -> None:
     hits = _scan_file(py_file)
     if hits:
         formatted = "\n".join(
-            f"  {py_file.name}:{lineno}  [{pattern}]  {line}"
-            for pattern, lineno, line in hits
+            f"  {py_file.name}:{lineno}  [{pattern}]  {line}" for pattern, lineno, line in hits
         )
         pytest.fail(
             f"forbidden remote-mutation tokens found in {py_file.name}:\n"

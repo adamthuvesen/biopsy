@@ -107,12 +107,15 @@ class TestCredentialResolution:
         with pytest.raises(MissingCredentialError, match="SNOWFLAKE_ACCOUNT"):
             resolve_credentials("snowflake")
 
-    def test_optional_vars_omitted_when_unset(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_optional_vars_omitted_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Optional-only scheme: missing vars are not errors.
         for var in (
-            "PGHOST", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGPORT", "PGSSLMODE",
+            "PGHOST",
+            "PGUSER",
+            "PGPASSWORD",
+            "PGDATABASE",
+            "PGPORT",
+            "PGSSLMODE",
         ):
             monkeypatch.delenv(var, raising=False)
         creds = resolve_credentials("postgres")
@@ -120,8 +123,10 @@ class TestCredentialResolution:
 
     def test_prefix_overrides_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for var in (
-            "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER",
-            "STAGING_SNOWFLAKE_ACCOUNT", "STAGING_SNOWFLAKE_USER",
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "STAGING_SNOWFLAKE_ACCOUNT",
+            "STAGING_SNOWFLAKE_USER",
         ):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("STAGING_SNOWFLAKE_ACCOUNT", "staging-acct")
@@ -136,9 +141,7 @@ class TestCredentialResolution:
         assert creds["SNOWFLAKE_ACCOUNT"] == "staging-acct"
         assert creds["SNOWFLAKE_USER"] == "staging-user"
 
-    def test_error_message_mentions_prefix_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_error_message_mentions_prefix_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for var in ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER"):
             monkeypatch.delenv(var, raising=False)
         with pytest.raises(MissingCredentialError) as exc:
@@ -153,8 +156,11 @@ class TestObjectStoreAdapter:
     def test_scan_sql_for_parquet(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # No AWS creds → no SECRET install attempted, but the SCAN sql is built.
         for var in (
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
         ):
             monkeypatch.delenv(var, raising=False)
         parsed = parse_warehouse_uri("s3://bucket/path/data.parquet")
@@ -206,28 +212,25 @@ class TestObjectStoreAdapter:
         con = duckdb.connect(":memory:")
         open_object_store(con, parsed)
         # DuckDB exposes secrets via duckdb_secrets().
-        rows = con.execute(
-            "SELECT name FROM duckdb_secrets() WHERE name = 'biopsy_s3'"
-        ).fetchall()
+        rows = con.execute("SELECT name FROM duckdb_secrets() WHERE name = 'biopsy_s3'").fetchall()
         assert rows == [("biopsy_s3",)], (
             "expected biopsy_s3 secret to be installed when AWS creds are present"
         )
 
-    def test_no_secret_when_credentials_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_secret_when_credentials_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for var in (
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
         ):
             monkeypatch.delenv(var, raising=False)
         parsed = parse_warehouse_uri("s3://bucket/data.parquet")
         assert parsed is not None
         con = duckdb.connect(":memory:")
         open_object_store(con, parsed)
-        rows = con.execute(
-            "SELECT name FROM duckdb_secrets() WHERE name = 'biopsy_s3'"
-        ).fetchall()
+        rows = con.execute("SELECT name FROM duckdb_secrets() WHERE name = 'biopsy_s3'").fetchall()
         assert rows == [], "no secret should be installed when AWS creds are unset"
 
     def test_supported_schemes_cover_object_store(self) -> None:
@@ -296,10 +299,7 @@ class TestSerializationRedaction:
     def test_uri_without_userinfo_unchanged(self) -> None:
         from biopsy.serialize import to_jsonable
 
-        assert (
-            to_jsonable("https://example.com/data.parquet")
-            == "https://example.com/data.parquet"
-        )
+        assert to_jsonable("https://example.com/data.parquet") == "https://example.com/data.parquet"
 
 
 # --- Network-gated end-to-end smoke ---------------------------------------

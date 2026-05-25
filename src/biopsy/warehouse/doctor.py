@@ -21,7 +21,8 @@ SchemaDiscoverer = Callable[
 
 
 def _object_store_schema(
-    parsed: ParsedURI, credentials_env: str | None,
+    parsed: ParsedURI,
+    credentials_env: str | None,
 ) -> tuple[dict[str, str], int | None]:
     from biopsy.warehouse.object_store import discover_schema
 
@@ -33,7 +34,8 @@ def _object_store_schema(
 
 
 def _postgres_schema(
-    parsed: ParsedURI, credentials_env: str | None,
+    parsed: ParsedURI,
+    credentials_env: str | None,
 ) -> tuple[dict[str, str], int | None]:
     from biopsy.warehouse.postgres import discover_schema
 
@@ -45,7 +47,8 @@ def _postgres_schema(
 
 
 def _bigquery_schema(
-    parsed: ParsedURI, credentials_env: str | None,
+    parsed: ParsedURI,
+    credentials_env: str | None,
 ) -> tuple[dict[str, str], int | None]:
     from biopsy.warehouse.bigquery import discover_schema
 
@@ -53,7 +56,8 @@ def _bigquery_schema(
 
 
 def _snowflake_schema(
-    parsed: ParsedURI, credentials_env: str | None,
+    parsed: ParsedURI,
+    credentials_env: str | None,
 ) -> tuple[dict[str, str], int | None]:
     from biopsy.warehouse.snowflake import discover_schema
 

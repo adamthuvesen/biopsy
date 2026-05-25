@@ -71,7 +71,9 @@ def load(
     cleanup: Any | None = None
     try:
         scan, resolved_path, display_name, resolved_uri, pushed_down, cleanup = _input_scan(
-            con, data, source_name,
+            con,
+            data,
+            source_name,
             credentials_env=credentials_env,
             where=where,
             sample=sample,
@@ -125,9 +127,7 @@ def load(
             )
         else:
             ddl = "CREATE TABLE" if is_file else "CREATE VIEW"
-            con.execute(
-                f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}"
-            )
+            con.execute(f"{ddl} data AS SELECT {select_clause} FROM {scan}{where_clause}")
 
         if cleanup is not None:
             cleanup()
@@ -188,7 +188,8 @@ def _input_scan(
         parsed = parse_warehouse_uri(text)
         if parsed is not None:
             scan_expr, qualified, display, pushed_down, cleanup = _scan_from_uri(
-                con, parsed,
+                con,
+                parsed,
                 credentials_env=credentials_env,
                 where=where,
                 sample=sample,
@@ -262,9 +263,7 @@ def _scan_from_uri(
 
         result = open_snowflake(con, parsed, options=options)
     else:
-        raise NotImplementedError(
-            f"Adapter for scheme '{scheme}' is not yet implemented."
-        )
+        raise NotImplementedError(f"Adapter for scheme '{scheme}' is not yet implemented.")
 
     display = _display_for_uri(parsed)
     if result.scan_sql is not None:
@@ -284,9 +283,7 @@ def _scan_from_uri(
             result.pushed_down,
             result.cleanup,
         )
-    raise RuntimeError(
-        f"Adapter for '{scheme}' returned neither scan_sql nor arrow_table."
-    )
+    raise RuntimeError(f"Adapter for '{scheme}' returned neither scan_sql nor arrow_table.")
 
 
 def _display_for_uri(parsed: Any) -> str:
@@ -307,9 +304,7 @@ def _materialize_relation(
     tmp = "__biopsy_arrow_input__"
     con.register(tmp, arrow_table)
     try:
-        con.execute(
-            f"CREATE TABLE {REGISTERED_INPUT_VIEW} AS SELECT * FROM {tmp}"
-        )
+        con.execute(f"CREATE TABLE {REGISTERED_INPUT_VIEW} AS SELECT * FROM {tmp}")
     finally:
         con.unregister(tmp)
 
@@ -318,16 +313,16 @@ def _materialize_relation(
 
 
 _FILTER_OPS = {
-    "==":        ("=",       "scalar"),
-    "!=":        ("<>",      "scalar"),
-    ">=":        (">=",      "scalar"),
-    "<=":        ("<=",      "scalar"),
-    ">":         (">",       "scalar"),
-    "<":         ("<",       "scalar"),
+    "==": ("=", "scalar"),
+    "!=": ("<>", "scalar"),
+    ">=": (">=", "scalar"),
+    "<=": ("<=", "scalar"),
+    ">": (">", "scalar"),
+    "<": ("<", "scalar"),
     "is not null": ("IS NOT NULL", "none"),
-    "is null":   ("IS NULL", "none"),
-    "not in":    ("NOT IN",  "list"),
-    "in":        ("IN",      "list"),
+    "is null": ("IS NULL", "none"),
+    "not in": ("NOT IN", "list"),
+    "in": ("IN", "list"),
 }
 
 # Symbolic ops (unambiguous, can appear anywhere) are tried first, in length
@@ -364,7 +359,7 @@ def parse_filter_expr(expr: str, dtypes: dict[str, str]) -> str:
     if leftmost is not None:
         idx, op_text = leftmost
         col = expr[:idx].strip()
-        val = expr[idx + len(op_text):].strip()
+        val = expr[idx + len(op_text) :].strip()
         if col:
             sql_op, kind = _FILTER_OPS[op_text]
             return _format_clause(col, sql_op, kind, val, dtypes)
@@ -381,7 +376,7 @@ def parse_filter_expr(expr: str, dtypes: dict[str, str]) -> str:
         # after that whitespace.
         op_start = m.start() + (1 if m.group().startswith((" ", "\t")) else 0)
         col = expr[:op_start].strip()
-        val = expr[m.end():].strip()
+        val = expr[m.end() :].strip()
         if not col:
             continue
         sql_op, kind = _FILTER_OPS[op_text]
@@ -448,14 +443,16 @@ def _inside_quotes(expr: str, idx: int) -> bool:
 
 
 def _format_clause(
-    col: str, sql_op: str, kind: str, val: str, dtypes: dict[str, str],
+    col: str,
+    sql_op: str,
+    kind: str,
+    val: str,
+    dtypes: dict[str, str],
 ) -> str:
     if col not in dtypes:
         available = list(dtypes)[:8]
         suffix = "..." if len(dtypes) > len(available) else ""
-        raise ValueError(
-            f"Unknown column in filter: {col!r}. Available: {available}{suffix}"
-        )
+        raise ValueError(f"Unknown column in filter: {col!r}. Available: {available}{suffix}")
     qcol = _quote_ident(col)
     col_dtype = dtypes[col]
     col_kind = kind_of(col_dtype)
@@ -463,9 +460,7 @@ def _format_clause(
 
     if kind == "none":
         if val:
-            raise ValueError(
-                f"Operator '{sql_op}' takes no value but got '{val}'."
-            )
+            raise ValueError(f"Operator '{sql_op}' takes no value but got '{val}'.")
         return f"{qcol} {sql_op}"
 
     if kind == "list":
@@ -502,12 +497,28 @@ def _quote_ident(name: str) -> str:
 
 
 NUMERIC_TYPES = {
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
-    "FLOAT", "DOUBLE", "DECIMAL",
+    "TINYINT",
+    "SMALLINT",
+    "INTEGER",
+    "BIGINT",
+    "HUGEINT",
+    "UTINYINT",
+    "USMALLINT",
+    "UINTEGER",
+    "UBIGINT",
+    "FLOAT",
+    "DOUBLE",
+    "DECIMAL",
 }
-TEMPORAL_TYPES = {"DATE", "TIME", "TIMESTAMP", "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS",
-                  "TIMESTAMP WITH TIME ZONE"}
+TEMPORAL_TYPES = {
+    "DATE",
+    "TIME",
+    "TIMESTAMP",
+    "TIMESTAMP_S",
+    "TIMESTAMP_MS",
+    "TIMESTAMP_NS",
+    "TIMESTAMP WITH TIME ZONE",
+}
 BOOL_TYPES = {"BOOLEAN"}
 
 

@@ -14,9 +14,7 @@ import numpy as np
 # scheme://user@host. The adapter contract strips these before we ever
 # reach serialization, but this catches mistakes — defense in depth so a
 # leaked credential never survives a save+share round-trip.
-_USERINFO_RE = re.compile(
-    r"(?P<scheme>[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/@\s]+@)"
-)
+_USERINFO_RE = re.compile(r"(?P<scheme>[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/@\s]+@)")
 
 
 def to_jsonable(value: Any) -> Any:

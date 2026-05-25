@@ -44,7 +44,9 @@ def profile_cmd(
         None, "--time", help="Time column for temporal leakage analysis. Auto-detected if omitted."
     ),
     exclude: list[str] = typer.Option(
-        [], "--exclude", "-x",
+        [],
+        "--exclude",
+        "-x",
         help="Column to drop from analysis (target proxies, IDs). Repeatable: -x A -x B.",
     ),
     exclude_file: Path | None = typer.Option(
@@ -54,20 +56,26 @@ def profile_cmd(
         None, "--ignore-missing-exclude", help="Skip absent --exclude columns instead of failing."
     ),
     where: list[str] = typer.Option(
-        [], "--filter", "-w",
+        [],
+        "--filter",
+        "-w",
         help="Filter expression. Repeatable. Examples: 'segment in train,test', 'value > 0'.",
     ),
     shortlist: int | None = typer.Option(
         None, "--shortlist", min=1, help="Cap the feature shortlist at N entries."
     ),
     cluster_cutoff: float | None = typer.Option(
-        None, "--cluster-cutoff", min=0.0, max=1.0,
+        None,
+        "--cluster-cutoff",
+        min=0.0,
+        max=1.0,
         help="Cluster cutoff on 1−|ρ| (default 0.30 ⇔ |ρ|≥0.70 collapses).",
     ),
     html: Path | None = typer.Option(None, "--html", help="Write an HTML supplement."),
     save: Path | None = typer.Option(None, "--save", help="Write the profile artifact as JSON."),
     pipeline: Path | None = typer.Option(
-        None, "--pipeline",
+        None,
+        "--pipeline",
         help="Write a runnable sklearn ColumnTransformer module from the action plan.",
     ),
     plotly_cdn: bool | None = typer.Option(
@@ -77,11 +85,14 @@ def profile_cmd(
         None, "--sample", min=1, help="Sample N rows before profiling."
     ),
     target_sample: int | None = typer.Option(
-        None, "--target-sample", min=100,
+        None,
+        "--target-sample",
+        min=100,
         help="Rows to sample for target metrics; stratified for low-cardinality targets.",
     ),
     fast: bool | None = typer.Option(
-        None, "--fast/--deep",
+        None,
+        "--fast/--deep",
         help="Fast skips pairwise MI and target permutation. Use --deep for the full analysis.",
     ),
     all_columns: bool | None = typer.Option(
@@ -92,12 +103,15 @@ def profile_cmd(
     ),
     bins: int | None = typer.Option(None, "--bins", min=1, help="Histogram bin count."),
     max_cols: int | None = typer.Option(
-        None, "--max-cols", min=2,
+        None,
+        "--max-cols",
+        min=2,
         help="Cap the number of columns in the pairwise MI pass. "
-             "Useful on wide datasets to keep runtime sub-linear.",
+        "Useful on wide datasets to keep runtime sub-linear.",
     ),
     credentials_env: str | None = typer.Option(
-        None, "--credentials-env",
+        None,
+        "--credentials-env",
         help=(
             "Prefix for warehouse credential env vars. With 'STAGING', biopsy "
             "reads STAGING_SNOWFLAKE_USER etc. instead of SNOWFLAKE_USER."
@@ -120,9 +134,7 @@ def profile_cmd(
     max_cols = coalesce(max_cols, cfg.get("max_cols"))
     all_columns = coalesce(all_columns, cfg.get("all_columns"))
     plotly_cdn = coalesce(plotly_cdn, cfg.get("plotly_cdn"))
-    ignore_missing_exclude = coalesce(
-        ignore_missing_exclude, cfg.get("ignore_missing_exclude")
-    )
+    ignore_missing_exclude = coalesce(ignore_missing_exclude, cfg.get("ignore_missing_exclude"))
     sample = int_option("sample", sample, default=None, min_value=1)
     shortlist = int_option("shortlist", shortlist, default=None, min_value=1)
     cluster_cutoff = float_option(
@@ -145,6 +157,7 @@ def profile_cmd(
 
     console = Console(width=120)
     progress_console = Console(stderr=True, width=120)
+
     def show_progress(message: str) -> None:
         progress_console.print(f"[dim]biopsy:[/dim] {message}")
 
@@ -155,8 +168,13 @@ def profile_cmd(
     progress_cb = show_progress if progress else None
     try:
         prof = cli.profile_fn(
-            path, target=target, time_col=time_col, sample=sample, hist_bins=bins,
-            cluster_cutoff=cluster_cutoff, shortlist_size=shortlist,
+            path,
+            target=target,
+            time_col=time_col,
+            sample=sample,
+            hist_bins=bins,
+            cluster_cutoff=cluster_cutoff,
+            shortlist_size=shortlist,
             exclude=exclude_cols or None,
             ignore_missing_exclude=ignore_missing_exclude,
             where=where_filters or None,
@@ -187,11 +205,8 @@ def profile_cmd(
         # source_name is `Path.name` for files and the last URI segment for
         # warehouse sources — `.stem` strips a trailing extension if any.
         stem = Path(prof.source_name).stem or "report"
-        out = html if html is not None else (
-            Path(tempfile.gettempdir()) / f"biopsy-{stem}.html"
-        )
+        out = html if html is not None else (Path(tempfile.gettempdir()) / f"biopsy-{stem}.html")
         rendered = render_html(prof, out, embed_plotly=not plotly_cdn)
         console.print(f"\n[dim]HTML report:[/dim] {rendered}")
         if open_browser:
             webbrowser.open(rendered.as_uri())
-

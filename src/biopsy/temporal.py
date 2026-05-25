@@ -26,8 +26,8 @@ from biopsy.targets import target_task_kind
 
 # --- thresholds (single source of truth) ----------------------------------
 
-LEAK_GAP_THRESHOLD = 0.25          # random_pps − time_pps must exceed this
-LEAK_MIN_RANDOM_PPS = 0.35         # only flag if the feature is actually predictive
+LEAK_GAP_THRESHOLD = 0.25  # random_pps − time_pps must exceed this
+LEAK_MIN_RANDOM_PPS = 0.35  # only flag if the feature is actually predictive
 POST_EVENT_MIN_RANDOM_PPS = 0.30
 POST_EVENT_MAX_TIME_PPS = 0.05
 POST_EVENT_MIN_GAP = 0.25
@@ -43,10 +43,10 @@ LeakageKind = Literal[
 ]
 DRIFT_KS_THRESHOLD = 0.3
 DRIFT_MIN_PPS = 0.1
-STRONG_DRIFT_KS = 0.5              # flag drift at info level even without PPS signal
+STRONG_DRIFT_KS = 0.5  # flag drift at info level even without PPS signal
 MONOTONIC_THRESHOLD = 0.95
 TARGET_DRIFT_RATIO = 2.0
-TARGET_DRIFT_BINARY_DIFF = 0.2     # 20 percentage points
+TARGET_DRIFT_BINARY_DIFF = 0.2  # 20 percentage points
 TARGET_DRIFT_REGRESSION_DIFF_SCALE = 1.0  # mean range >= 1 target-IQR/std
 MIN_ROWS = 1000
 MIN_TIME_VALUES = 10
@@ -57,6 +57,7 @@ MIN_TEST_POSITIVES_CLASSIF = 30
 
 # --- dataclasses -----------------------------------------------------------
 
+
 @dataclass
 class TemporalSignal:
     feature: str
@@ -64,8 +65,8 @@ class TemporalSignal:
     random_pps: float | None
     drift_ks: float | None
     time_monotonicity: float | None
-    severity: str           # "critical" | "warning" | "info" | "none"
-    reason: str             # human-readable
+    severity: str  # "critical" | "warning" | "info" | "none"
+    reason: str  # human-readable
     leakage_kind: LeakageKind = "none"
 
     @property
@@ -83,7 +84,7 @@ class TemporalReport:
     # binary: max-min rate; regression_ratio: max/min; regression_diff: max-min
     target_drift: float | None
     target_drift_kind: str | None
-    insufficient: str | None       # reason for skipping per-feature analysis, if any
+    insufficient: str | None  # reason for skipping per-feature analysis, if any
     target_drift_score: float | None = None  # threshold-scale score; same units except diff
     time_buckets: list[TimeBucket] = field(default_factory=list)
 
@@ -98,6 +99,7 @@ class TimeBucket:
 
 
 # --- time column resolution ------------------------------------------------
+
 
 def resolve_time_column(
     stats: dict[str, ColumnStats],
@@ -131,6 +133,7 @@ def resolve_time_column(
 
 # --- main entry point ------------------------------------------------------
 
+
 def temporal_signals(
     src: Source,
     stats: dict[str, ColumnStats],
@@ -149,10 +152,13 @@ def temporal_signals(
     if t_stats.n_unique < MIN_TIME_VALUES:
         buckets = _time_bucket_summary(src, stats, time_col, target)
         target_drift, target_drift_kind, target_drift_score = _target_drift_from_buckets(
-            buckets, stats.get(target) if target else None,
+            buckets,
+            stats.get(target) if target else None,
         )
         return TemporalReport(
-            time_column=time_col, target=target, signals=[],
+            time_column=time_col,
+            target=target,
+            signals=[],
             target_drift=target_drift,
             target_drift_kind=target_drift_kind,
             target_drift_score=target_drift_score,
@@ -171,15 +177,20 @@ def temporal_signals(
 
     # Pick the feature set — same eligibility as target_signal.
     features = [
-        name for name, s in stats.items()
+        name
+        for name, s in stats.items()
         if name not in {time_col, target}
         and not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 100))
     ]
     if not features:
         return TemporalReport(
-            time_column=time_col, target=target, signals=[],
-            target_drift=None, target_drift_kind=None, target_drift_score=None,
+            time_column=time_col,
+            target=target,
+            signals=[],
+            target_drift=None,
+            target_drift_kind=None,
+            target_drift_score=None,
             time_buckets=_time_bucket_summary(src, stats, time_col, target),
             insufficient="No eligible features for temporal analysis.",
         )
@@ -226,9 +237,9 @@ def temporal_signals(
         target_valid = _valid_mask(y_raw)
         if target_kind == "classification":
             y_full = np.full(n, -1, dtype=int)
-            y_full[target_valid] = LabelEncoder().fit_transform(
-                y_raw[target_valid].astype(str)
-            ).astype(int)
+            y_full[target_valid] = (
+                LabelEncoder().fit_transform(y_raw[target_valid].astype(str)).astype(int)
+            )
         else:
             y_full = np.full(n, np.nan, dtype=np.float64)
             y_full[target_valid] = np.asarray(y_raw[target_valid], dtype=np.float64)
@@ -290,9 +301,16 @@ def temporal_signals(
                 s.reason = f"Time-monotonic, but `{time_col}` looks like ingest order."
 
     # Target drift
-    target_drift, target_drift_kind, target_drift_score = _target_drift(
-        y_full, target_valid, target_kind, time_as_float,
-    ) if y_full is not None else (None, None, None)
+    target_drift, target_drift_kind, target_drift_score = (
+        _target_drift(
+            y_full,
+            target_valid,
+            target_kind,
+            time_as_float,
+        )
+        if y_full is not None
+        else (None, None, None)
+    )
 
     return TemporalReport(
         time_column=time_col,
@@ -307,6 +325,7 @@ def temporal_signals(
 
 
 # --- per-feature analysis --------------------------------------------------
+
 
 def _analyze_feature(
     feat: str,
@@ -374,7 +393,9 @@ def _analyze_feature(
             and _enough_test_classes(y_full[test_idx], target_kind)
         ):
             time_pps = pps(
-                x_enc.reshape(-1, 1), y_full, target_kind,
+                x_enc.reshape(-1, 1),
+                y_full,
+                target_kind,
                 split=(train_idx, test_idx),
             )
 
@@ -387,7 +408,9 @@ def _analyze_feature(
             and _enough_test_classes(y_full[rand_test], target_kind)
         ):
             random_pps = pps(
-                x_enc.reshape(-1, 1), y_full, target_kind,
+                x_enc.reshape(-1, 1),
+                y_full,
+                target_kind,
                 split=(rand_train, rand_test),
             )
 
@@ -422,59 +445,84 @@ def _classify(
 ) -> tuple[str, str, LeakageKind]:
     # Leakage: predictive power collapses on time-ordered eval
     if (
-        random_pps is not None and time_pps is not None
+        random_pps is not None
+        and time_pps is not None
         and random_pps >= LEAK_MIN_RANDOM_PPS
         and (random_pps - time_pps) >= LEAK_GAP_THRESHOLD
     ):
-        return "critical", (
-            f"Predicts target on random CV ({random_pps:.2f}) but fails on "
-            f"time-ordered split ({time_pps:.2f}). Likely contains future information."
-        ), "random_cv"
+        return (
+            "critical",
+            (
+                f"Predicts target on random CV ({random_pps:.2f}) but fails on "
+                f"time-ordered split ({time_pps:.2f}). Likely contains future information."
+            ),
+            "random_cv",
+        )
 
     # Post-event leakage: target signal is present in only part of the time
     # range. Lower random_pps threshold catches features that pop in late, are
     # computed from future events, and don't generalize across time.
     if (
-        random_pps is not None and time_pps is not None
+        random_pps is not None
+        and time_pps is not None
         and random_pps >= POST_EVENT_MIN_RANDOM_PPS
         and time_pps < POST_EVENT_MAX_TIME_PPS
         and (random_pps - time_pps) >= POST_EVENT_MIN_GAP
-        and drift_ks is not None and drift_ks >= POST_EVENT_MIN_DRIFT_KS
+        and drift_ks is not None
+        and drift_ks >= POST_EVENT_MIN_DRIFT_KS
     ):
-        return "critical", (
-            f"Random-CV predictive signal ({random_pps:.2f}) but time-ordered "
-            f"split scores near zero ({time_pps:.2f}) with strong drift "
-            f"(KS={drift_ks:.2f}). Likely contains future information from "
-            "post-event values."
-        ), "post_event"
+        return (
+            "critical",
+            (
+                f"Random-CV predictive signal ({random_pps:.2f}) but time-ordered "
+                f"split scores near zero ({time_pps:.2f}) with strong drift "
+                f"(KS={drift_ks:.2f}). Likely contains future information from "
+                "post-event values."
+            ),
+            "post_event",
+        )
 
     # Drift + non-trivial predictive signal
     if (
-        drift_ks is not None and drift_ks >= DRIFT_KS_THRESHOLD
+        drift_ks is not None
+        and drift_ks >= DRIFT_KS_THRESHOLD
         and ((random_pps or 0) >= DRIFT_MIN_PPS or (time_pps or 0) >= DRIFT_MIN_PPS)
     ):
-        return "warning", (
-            f"Distribution shifts over time (KS={drift_ks:.2f}) on a predictive feature. "
-            "Production model may degrade."
-        ), "drift"
+        return (
+            "warning",
+            (
+                f"Distribution shifts over time (KS={drift_ks:.2f}) on a predictive feature. "
+                "Production model may degrade."
+            ),
+            "drift",
+        )
 
     # Strong drift without a PPS signal — common for regression targets where
     # individual features score near-zero PPS but still shift seasonally/temporally.
     if drift_ks is not None and drift_ks >= STRONG_DRIFT_KS:
-        return "info", (
-            f"Distribution shifts significantly over time (KS={drift_ks:.2f}). "
-            "May indicate seasonal patterns or concept drift."
-        ), "strong_drift"
+        return (
+            "info",
+            (
+                f"Distribution shifts significantly over time (KS={drift_ks:.2f}). "
+                "May indicate seasonal patterns or concept drift."
+            ),
+            "strong_drift",
+        )
 
     # Time-monotonic + unique-per-row
     if (
-        time_monotonicity is not None and time_monotonicity >= MONOTONIC_THRESHOLD
+        time_monotonicity is not None
+        and time_monotonicity >= MONOTONIC_THRESHOLD
         and n_unique >= n_nonnull * 0.9
     ):
-        return "warning", (
-            f"Strictly increases/decreases with time (Spearman={time_monotonicity:.2f}) "
-            "and is unique-per-row — likely a row counter or ingest timestamp."
-        ), "monotonic"
+        return (
+            "warning",
+            (
+                f"Strictly increases/decreases with time (Spearman={time_monotonicity:.2f}) "
+                "and is unique-per-row — likely a row counter or ingest timestamp."
+            ),
+            "monotonic",
+        )
 
     return "none", "", "none"
 
@@ -534,6 +582,7 @@ def _enough_test_classes(y: np.ndarray, target_kind: str) -> bool:
 
 
 # --- helpers ---------------------------------------------------------------
+
 
 def _time_to_float(values: np.ndarray) -> np.ndarray:
     """Convert temporal values to a float scalar suitable for ranking."""

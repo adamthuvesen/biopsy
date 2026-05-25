@@ -22,7 +22,8 @@ def doctor_cmd(
     ),
     sample: int = typer.Option(5000, "--sample", min=100, help="Rows to scan for inference."),
     credentials_env: str | None = typer.Option(
-        None, "--credentials-env",
+        None,
+        "--credentials-env",
         help="Prefix for warehouse credential env vars. See `biopsy profile --help`.",
     ),
 ) -> None:
@@ -39,7 +40,9 @@ def doctor_cmd(
     # need row data, so warehouse doctor skips them and prints a tip.
     try:
         stats, display_name, n_rows_estimate, schema_only = doctor_load(
-            path, sample=sample, credentials_env=credentials_env,
+            path,
+            sample=sample,
+            credentials_env=credentials_env,
         )
     except USER_ERRORS as exc:
         clean_exit_on_user_error(exc)
@@ -61,7 +64,9 @@ def doctor_cmd(
     head.add_column("looks like", style="yellow")
     for s in stats.values():
         head.add_row(
-            s.name, s.dtype.lower(), s.kind,
+            s.name,
+            s.dtype.lower(),
+            s.kind,
             f"{s.null_rate:.0%}" if s.null_rate else "—",
             f"{s.n_unique:,}",
             ", ".join(doctor_hints(s)),
@@ -96,7 +101,10 @@ def doctor_cmd(
 
 
 def doctor_load(
-    path: str, *, sample: int, credentials_env: str | None,
+    path: str,
+    *,
+    sample: int,
+    credentials_env: str | None,
 ) -> tuple[dict[str, ColumnStats], str, int | None, bool]:
     """Resolve doctor input: warehouse schema discovery or sampled local load."""
     wh = discover_warehouse_schema(path, credentials_env=credentials_env)

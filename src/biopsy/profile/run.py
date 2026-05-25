@@ -1,4 +1,5 @@
 """Profiling pipeline orchestration."""
+
 from __future__ import annotations
 
 import time
@@ -25,6 +26,7 @@ from biopsy.targets import TargetSummary, target_task_kind
 from biopsy.temporal import resolve_time_column, temporal_signals
 
 ProgressCallback = Callable[[str], None]
+
 
 def profile(
     data: str | Path | Any,
@@ -72,9 +74,7 @@ def profile(
     target_src: Source | None = None
     try:
         if target is not None and target not in src.columns:
-            raise ValueError(
-                f"Target column '{target}' not in dataset. Available: {src.columns}"
-            )
+            raise ValueError(f"Target column '{target}' not in dataset. Available: {src.columns}")
 
         _progress(progress, "Computing column statistics")
         stats = compute_all(src, hist_bins=hist_bins)
@@ -134,7 +134,8 @@ def profile(
 
         _progress(progress, "Clustering redundant features")
         clusters_report = cluster_features(
-            src, stats,
+            src,
+            stats,
             target=target,
             target_signals=target_sigs if target else None,
             cutoff=cluster_cutoff,
@@ -152,14 +153,16 @@ def profile(
         findings += temporal_findings(temporal_report, target)
 
         if time_info is not None and resolved_time is None:
-            findings.append(Finding(
-                severity="info",
-                category="temporal",
-                title="Temporal analysis skipped",
-                detail=time_info,
-                columns=[],
-                score=0.0,
-            ))
+            findings.append(
+                Finding(
+                    severity="info",
+                    category="temporal",
+                    title="Temporal analysis skipped",
+                    detail=time_info,
+                    columns=[],
+                    score=0.0,
+                )
+            )
 
         findings = rank(findings)
 
@@ -220,7 +223,9 @@ def _progress(callback: ProgressCallback | None, message: str) -> None:
 
 
 def _univariate_priority(
-    src: Source, stats: dict[str, ColumnStats], target: str,
+    src: Source,
+    stats: dict[str, ColumnStats],
+    target: str,
 ) -> list[str]:
     """Rank candidate features cheaply for the pairwise-MI cap.
 
@@ -231,10 +236,7 @@ def _univariate_priority(
     target_stats = stats.get(target)
     if target_stats is None:
         return [n for n in stats if n != target]
-    eligible = [
-        n for n, s in stats.items()
-        if n != target and not s.is_constant
-    ]
+    eligible = [n for n, s in stats.items() if n != target and not s.is_constant]
     if not eligible:
         return []
     target_numeric = target_stats.kind == "numeric"
@@ -242,9 +244,7 @@ def _univariate_priority(
     abs_corr: dict[str, float] = {}
     if target_numeric and numeric_eligible:
         qtarget = _quote(target)
-        select = ", ".join(
-            f"abs(corr({_quote(n)}, {qtarget}))" for n in numeric_eligible
-        )
+        select = ", ".join(f"abs(corr({_quote(n)}, {qtarget}))" for n in numeric_eligible)
         row = src.con.execute(f"SELECT {select} FROM data").fetchone()
         for name, value in zip(numeric_eligible, row, strict=True):
             if value is not None:
@@ -330,5 +330,3 @@ def _target_summary(src: Source, target_stats: ColumnStats) -> TargetSummary:
         positive_rate=positive_rate,
         min_class_count=min_class_count,
     )
-
-

@@ -18,14 +18,20 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 
-SUPPORTED_SCHEMES: frozenset[str] = frozenset({
-    "snowflake",
-    "bigquery",
-    "postgres", "postgresql",
-    "s3", "s3a",
-    "https", "http",
-    "gs", "gcs",
-})
+SUPPORTED_SCHEMES: frozenset[str] = frozenset(
+    {
+        "snowflake",
+        "bigquery",
+        "postgres",
+        "postgresql",
+        "s3",
+        "s3a",
+        "https",
+        "http",
+        "gs",
+        "gcs",
+    }
+)
 
 # A SQL identifier (optionally schema-qualified): `events` or `public.events`.
 # Three-part Snowflake/BigQuery names use dots too: `db.schema.table`.
@@ -142,9 +148,7 @@ def parse_warehouse_uri(value: str) -> ParsedURI | None:
         return None
     if scheme not in SUPPORTED_SCHEMES:
         supported = ", ".join(sorted(SUPPORTED_SCHEMES))
-        raise ValueError(
-            f"Unsupported URI scheme '{scheme}'. Supported: {supported}."
-        )
+        raise ValueError(f"Unsupported URI scheme '{scheme}'. Supported: {supported}.")
 
     # Strip userinfo: rebuild netloc without `user:pass@`.
     host = parsed.hostname
@@ -265,9 +269,7 @@ _CREDENTIAL_KEYS: dict[str, list[tuple[str, bool]]] = {
 }
 
 
-def resolve_credentials(
-    scheme: str, prefix: str | None = None
-) -> dict[str, str]:
+def resolve_credentials(scheme: str, prefix: str | None = None) -> dict[str, str]:
     """Look up credentials for a scheme from environment variables.
 
     With `prefix='STAGING'`, looks up `STAGING_SNOWFLAKE_USER` etc. instead
@@ -296,8 +298,7 @@ def resolve_credentials(
                     else f" (currently using --credentials-env {prefix})"
                 )
                 raise MissingCredentialError(
-                    f"Missing required env var {env_name(base)} "
-                    f"for {scheme}://...{hint}"
+                    f"Missing required env var {env_name(base)} for {scheme}://...{hint}"
                 )
             continue
         out[base] = value

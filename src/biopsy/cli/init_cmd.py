@@ -76,23 +76,25 @@ def init_config_text(
     if target:
         lines.append(f"target = {toml_string(target)}")
     else:
-        lines.append("# target = \"your_target_column\"")
+        lines.append('# target = "your_target_column"')
     if time_col:
         lines.append(f"time = {toml_string(time_col)}")
     else:
-        lines.append("# time = \"your_time_column\"")
-    lines.extend([
-        f"exclude = {toml_string_list(excludes)}",
-        "filter = []",
-        "fast = true",
-        "target_sample = 30000",
-        "ignore_missing_exclude = true",
-        "plotly_cdn = true",
-        "",
-        "[profiles.deep]",
-        "fast = false",
-        "target_sample = 50000",
-    ])
+        lines.append('# time = "your_time_column"')
+    lines.extend(
+        [
+            f"exclude = {toml_string_list(excludes)}",
+            "filter = []",
+            "fast = true",
+            "target_sample = 30000",
+            "ignore_missing_exclude = true",
+            "plotly_cdn = true",
+            "",
+            "[profiles.deep]",
+            "fast = false",
+            "target_sample = 50000",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

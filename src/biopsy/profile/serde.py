@@ -1,4 +1,5 @@
 """Profile JSON load helpers."""
+
 from __future__ import annotations
 
 import json
@@ -49,9 +50,7 @@ def _from_temporal_report(data: dict[str, Any] | None) -> TemporalReport | None:
         target_drift_kind=data.get("target_drift_kind"),
         insufficient=data.get("insufficient"),
         target_drift_score=data.get("target_drift_score"),
-        time_buckets=[
-            TimeBucket(**payload) for payload in data.get("time_buckets", [])
-        ],
+        time_buckets=[TimeBucket(**payload) for payload in data.get("time_buckets", [])],
     )
 
 
@@ -60,12 +59,8 @@ def _from_cluster_report(data: dict[str, Any] | None) -> ClusterReport | None:
         return None
     return ClusterReport(
         clusters=[Cluster(**payload) for payload in data.get("clusters", [])],
-        shortlist=[
-            ShortlistEntry(**payload) for payload in data.get("shortlist", [])
-        ],
+        shortlist=[ShortlistEntry(**payload) for payload in data.get("shortlist", [])],
         cutoff=float(data["cutoff"]),
         n_features=int(data.get("n_features", 0)),
         n_singletons=int(data.get("n_singletons", 0)),
     )
-
-

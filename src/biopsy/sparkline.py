@@ -29,6 +29,5 @@ def sparkline(counts: Sequence[float], width: int | None = None) -> str:
         return BLOCKS[0] * len(counts)
     n_blocks = len(BLOCKS) - 1
     return "".join(
-        BLOCKS[min(round(c / hi_val * n_blocks), n_blocks)] if c > 0 else " "
-        for c in counts
+        BLOCKS[min(round(c / hi_val * n_blocks), n_blocks)] if c > 0 else " " for c in counts
     )

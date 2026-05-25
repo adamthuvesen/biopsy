@@ -77,5 +77,3 @@ def test_html_render(tmp_path: Path) -> None:
     cdn_out = render_html(prof, tmp_path / "report-cdn.html", embed_plotly=False)
     cdn_content = cdn_out.read_text()
     assert '<script src="https://cdn.plot.ly' in cdn_content
-
-

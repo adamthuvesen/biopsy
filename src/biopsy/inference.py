@@ -46,7 +46,8 @@ def infer_target(stats: dict[str, ColumnStats]) -> str | None:
 
 def infer_time(stats: dict[str, ColumnStats]) -> str | None:
     temporal = [
-        name for name, col_stats in stats.items()
+        name
+        for name, col_stats in stats.items()
         if col_stats.kind == "temporal" and col_stats.n_unique >= 10
     ]
     if len(temporal) == 1:
@@ -76,11 +77,7 @@ def infer_excludes(
         if looks_like_id(name) and col_stats.unique_rate >= 0.95:
             excludes.append(name)
             continue
-        if (
-            col_stats.kind == "text"
-            and col_stats.unique_rate >= 0.80
-            and col_stats.n_unique > 100
-        ):
+        if col_stats.kind == "text" and col_stats.unique_rate >= 0.80 and col_stats.n_unique > 100:
             excludes.append(name)
     return excludes
 

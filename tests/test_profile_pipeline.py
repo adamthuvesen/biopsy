@@ -357,5 +357,3 @@ def test_max_cols_limits_pairwise_pass(tmp_path: Path) -> None:
     }
     assert len(full_mi_cols) > len(capped_mi_cols)
     assert len(capped_mi_cols) <= 10
-
-

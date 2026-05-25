@@ -136,9 +136,22 @@ def compute_column(
                     THEN 1 ELSE 0 END)
             FROM data
         """).fetchone()
-        (stats.mean, stats.std, stats.min, stats.p01, stats.p25, stats.p50,
-         stats.p75, stats.p99, stats.max, stats.skew, stats.kurtosis,
-         stats.n_zero, stats.n_negative, stats.n_outliers_iqr) = row
+        (
+            stats.mean,
+            stats.std,
+            stats.min,
+            stats.p01,
+            stats.p25,
+            stats.p50,
+            stats.p75,
+            stats.p99,
+            stats.max,
+            stats.skew,
+            stats.kurtosis,
+            stats.n_zero,
+            stats.n_negative,
+            stats.n_outliers_iqr,
+        ) = row
         top = src.con.execute(f"""
             SELECT {col}::VARCHAR, COUNT(*) AS c
             FROM data
@@ -154,7 +167,11 @@ def compute_column(
             stats.kurtosis = None
 
         stats.histogram = _numeric_histogram(
-            src, name, hist_bins, lo=stats.min, hi=stats.max,
+            src,
+            name,
+            hist_bins,
+            lo=stats.min,
+            hi=stats.max,
         )
 
     elif kind in {"text", "bool", "other"} and n_nonnull > 0:
@@ -229,15 +246,14 @@ def _numeric_histogram(
     if lo is None or hi is None:
         return []
     if lo == hi:
-        c = src.con.execute(
-            f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]
-        ).fetchone()[0]
+        c = src.con.execute(f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]).fetchone()[0]
         return [(lo, hi, c)]
 
     width = (hi - lo) / bins
     # bucket via floor((x - lo) / width), clipped to [0, bins-1]; GREATEST
     # guards floating-point underflow at x == lo producing a negative bin.
-    rows = src.con.execute(f"""
+    rows = src.con.execute(
+        f"""
         WITH b AS (
             SELECT GREATEST(
                 0,
@@ -246,12 +262,11 @@ def _numeric_histogram(
             FROM data WHERE {where}
         )
         SELECT bin, COUNT(*) FROM b GROUP BY bin ORDER BY bin
-    """, [lo, width, bins - 1]).fetchall()
+    """,
+        [lo, width, bins - 1],
+    ).fetchall()
     counts = {int(b): c for b, c in rows}
-    return [
-        (lo + i * width, lo + (i + 1) * width, counts.get(i, 0))
-        for i in range(bins)
-    ]
+    return [(lo + i * width, lo + (i + 1) * width, counts.get(i, 0)) for i in range(bins)]
 
 
 def compute_all(src: Source, hist_bins: int = 24) -> dict[str, ColumnStats]:
