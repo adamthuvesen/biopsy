@@ -20,19 +20,39 @@ src/biopsy/
 ├── findings.py      # ranked findings synthesis + smart detectors
 ├── action_plan.py   # drop / impute / encode / transform / split / cv + sklearn codegen
 ├── compare.py       # profile-to-profile drift (KS / Wasserstein / PSI / χ² / JS)
-├── profile.py       # orchestrator + Profile / ProfileDiff API
-├── cli.py           # Typer CLI (profile / compare / diff / doctor / notebook / render / init / demo)
+├── targets.py       # target column typing shared across profiling/correlations/temporal
+├── inference.py     # heuristics for target/time candidates, ID detection, doctor hints
+├── matrix.py        # shared sampled matrices for one profile run
+├── serialize.py     # JSON-safe serialization helpers for public report objects
 ├── demo.py          # synthetic dataset generator
 ├── sparkline.py     # unicode sparklines for terminal
+├── profile/         # orchestrator + public API (was profile.py)
+│   ├── run.py       # profiling pipeline orchestrator
+│   ├── model.py     # Profile / ProfileDiff dataclasses
+│   ├── diff.py      # finding-level diff between profiles
+│   └── serde.py     # profile <-> JSON load/save
+├── cli/             # Typer CLI (was cli.py) — one module per command
+│   ├── profile_cmd.py / compare_cmd.py / diff_cmd.py / doctor_cmd.py
+│   ├── init_cmd.py / demo_cmd.py / notebook.py
+│   ├── config.py    # biopsy.toml parsing + CONFIG_KNOWN_KEYS (keep aligned with CLI flags)
+│   └── common.py    # shared option types + credential plumbing
+├── warehouse/       # remote sources: postgres, bigquery, snowflake (+ object_store, doctor)
 ├── render/
-│   ├── terminal.py  # Rich terminal report
+│   ├── terminal.py  # Rich terminal report (100-char cap layout)
+│   ├── charts.py    # Plotly chart builders
 │   └── html.py      # Plotly + Jinja HTML report and compare report
 └── templates/
     ├── report.html.j2
     └── compare.html.j2
-tests/
-└── test_smoke.py    # smoke tests covering core paths + regression tests for fixed bugs
+tests/                          # split from the old test_smoke.py into domain modules
+├── test_smoke.py               # core-path smoke + regression tests for fixed bugs
+├── test_temporal.py / test_correlations.py / test_action_plan.py
+├── test_findings_quality.py / test_compare.py / test_render.py / test_cli.py
+├── test_profile_pipeline.py / test_filter_and_io.py
+└── test_warehouse*.py          # postgres (docker-compose), bigquery, snowflake, readonly
 ```
+
+CI runs GitHub Actions on branch pushes; the suite plus a `ruff format --check` gate must pass.
 
 ## Stack + conventions
 
