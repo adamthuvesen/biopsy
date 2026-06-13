@@ -10,6 +10,69 @@ It is opinionated on purpose: a descriptive profiler shows you everything about
 every column; biopsy ranks the dozen things that matter for the model and says
 what to do about them.
 
+## Why not ydata-profiling?
+
+Different job. `ydata-profiling`, SweetViz, and DataPrep write an exhaustive
+*description* of a dataset — dozens of sections of histograms, quantiles, and
+correlations for every column. `biopsy` *ranks* the handful of things that will
+break your model and says what to do about each. Leakage is the clearest case.
+
+`biopsy demo --rows 5000` builds a synthetic churn dataset with one planted
+**temporal leak**: `cohort_engagement_v2` is backfilled from the outcome, but
+only for the most recent ~30% of users. It looks like a perfectly healthy
+feature — no nulls, a clean distribution, every value present.
+
+ydata-profiling renders it as 1 of 15 variable cards and tags it **High
+correlation** with the target. But that badge is one of 14 unranked alerts — the
+same one it puts on the benign `n_logins ↔ tenure_months` pair — and "correlated
+with the target" is what every *good* feature looks like. ydata never splits on
+time, so it can't tell this leak from signal:
+
+![ydata-profiling's card for cohort_engagement_v2 — a healthy numeric column with a High correlation badge, no leak warning](assets/ydata-cohort-engagement.png)
+
+`biopsy` ranks the same column as a **CRITICAL** leak, at the top of the report,
+and shows the mechanism:
+
+```text
+───────────────────────────── Findings ─────────────────────────────
+ ■  `days_since_last_login` may leak the target (score=1.00)
+ ■  `cohort_engagement_v2` may leak future information
+    Predicts target on random CV (0.39) but fails on time-ordered
+    split (0.00). Likely contains future information.
+ ▲  `status` is constant
+ ▲  `constant_col` is constant
+ ▲  `user_id` looks like an identifier
+        … 10 more findings, ranked by severity
+
+──────────────────────── Temporal → signup_date ────────────────────
+ feature                random→time   drift   monotonicity
+ cohort_engagement_v2   0.39 → 0.00    0.53           0.07
+```
+
+The tell is the **collapse**: 0.39 predictive power (PPS) under random
+cross-validation, **0.00** under a time-ordered split. Validate the usual way
+and this column looks like one of your best features in testing, then
+contributes nothing in production. A describe-everything profiler can't surface
+that — a ranked report with a time-ordered check is the whole point of `biopsy`.
+
+<details>
+<summary>Reproduce both numbers (the demo seed is pinned)</summary>
+
+```bash
+# write the identical demo dataset — biopsy's seed is fixed at 42
+python -c "from biopsy.demo import write_demo_csv; write_demo_csv('/tmp/demo.csv', n=5000)"
+
+# biopsy's view — the CRITICAL leak block above
+biopsy profile /tmp/demo.csv --target churned
+
+# ydata-profiling's view — a throwaway venv, never added to biopsy's deps
+uv venv /tmp/ydata
+uv pip install --python /tmp/ydata/bin/python ydata-profiling pandas "setuptools<81"
+/tmp/ydata/bin/python -c "import pandas as pd; from ydata_profiling import ProfileReport; ProfileReport(pd.read_csv('/tmp/demo.csv')).to_file('/tmp/ydata.html')"
+```
+
+</details>
+
 ```bash
 biopsy profile data.parquet --target label
 biopsy profile data.parquet --target label --html report.html --pipeline preprocess.py
@@ -41,9 +104,6 @@ prof.to_sklearn_pipeline_code()
 - Drift reports with schema changes, target movement, and per-column distribution
   changes.
 - Optional HTML reports and saved JSON artifacts.
-
-Use `ydata-profiling`, SweetViz, or DataPrep when you want a broad descriptive
-profile. Use `biopsy` when you want a short ranked report before training a model.
 
 ## Install
 
