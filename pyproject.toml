@@ -1,7 +1,7 @@
 [project]
 name = "biopsy"
 version = "0.1.0"
-description = "Instant, opinionated EDA in the terminal."
+description = "Opinionated, ranked EDA for the first pass before training a model."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Adam Thuvesen" }]

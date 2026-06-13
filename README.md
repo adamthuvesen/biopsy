@@ -1,8 +1,14 @@
 # biopsy
 
-`biopsy` is EDA for model prep. Give it a CSV, Parquet file, dataframe, or
-warehouse table; it prints the columns worth checking first, flags likely
-problems, and can write a starter sklearn preprocessor.
+`biopsy` is a Python library and CLI for the first EDA pass before you train a
+model. Point it at a CSV, Parquet file, dataframe, or warehouse table and it
+returns a short ranked report: the columns worth checking first, the likely
+modeling problems (leakage, drift, nulls, IDs), the target signal per feature,
+and a preprocessing plan it can emit as runnable sklearn code.
+
+It is opinionated on purpose: a descriptive profiler shows you everything about
+every column; biopsy ranks the dozen things that matter for the model and says
+what to do about them.
 
 ```bash
 biopsy profile data.parquet --target label
@@ -22,7 +28,7 @@ prof.action_plan()
 prof.to_sklearn_pipeline_code()
 ```
 
-## What You Get
+## What it reports
 
 - Ranked findings: leakage, drift, nulls, outliers, IDs, suspicious date strings,
   near-constant columns, and other modeling risks.
