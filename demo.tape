@@ -9,12 +9,6 @@ Set Padding 16
 Set TypingSpeed 55ms
 Set PlaybackSpeed 1.25
 
-Hide
-  Type "cd /Users/adamthuvesen/dev/menti/biopsy"
-  Enter
-  Sleep 500ms
-Show
-
 Sleep 300ms
 Type "uv run biopsy demo --rows 5000 --no-html"
 Sleep 400ms
