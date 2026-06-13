@@ -10,6 +10,50 @@ It is opinionated on purpose: a descriptive profiler shows you everything about
 every column; biopsy ranks the dozen things that matter for the model and says
 what to do about them.
 
+## Why not ydata-profiling?
+
+Different job. `ydata-profiling`, SweetViz, and DataPrep *describe* every column —
+dozens of sections of histograms, quantiles, and correlations. `biopsy` *ranks*
+the handful of things that will break your model. Leakage is the clearest case.
+
+`biopsy demo --rows 5000` plants one **temporal leak**: `cohort_engagement_v2` is
+backfilled from the outcome, but only for the most recent ~30% of users, so it
+looks like a healthy feature. ydata-profiling shows it as 1 of 15 cards with a
+generic **High correlation** badge — one of 14 unranked alerts, the same badge it
+gives benign pairs. It never splits on time, so it can't tell a leak from signal:
+
+![ydata-profiling's card for cohort_engagement_v2 — a healthy numeric column with a High correlation badge, no leak warning](assets/ydata-cohort-engagement.png)
+
+`biopsy` ranks the same column **CRITICAL**, at the top of the report:
+
+```text
+ ■  `cohort_engagement_v2` may leak future information
+    Predicts target on random CV (0.39) but fails on time-ordered split (0.00).
+
+ Temporal → signup_date
+ feature                random→time   drift
+ cohort_engagement_v2   0.39 → 0.00    0.53
+```
+
+The tell is the collapse: predictive power (PPS) 0.39 under random CV → **0.00**
+under a time-ordered split. It looks like a top feature in testing, then
+contributes nothing in production — something a description-only profiler can't see.
+
+<details>
+<summary>Reproduce both numbers (the demo seed is pinned)</summary>
+
+```bash
+# identical demo dataset — biopsy's seed is fixed at 42
+python -c "from biopsy.demo import write_demo_csv; write_demo_csv('/tmp/demo.csv', n=5000)"
+biopsy profile /tmp/demo.csv --target churned
+
+# ydata-profiling — throwaway venv, never added to biopsy's deps
+uv venv /tmp/ydata && uv pip install --python /tmp/ydata/bin/python ydata-profiling pandas "setuptools<81"
+/tmp/ydata/bin/python -c "import pandas as pd; from ydata_profiling import ProfileReport; ProfileReport(pd.read_csv('/tmp/demo.csv')).to_file('/tmp/ydata.html')"
+```
+
+</details>
+
 ```bash
 biopsy profile data.parquet --target label
 biopsy profile data.parquet --target label --html report.html --pipeline preprocess.py
@@ -41,9 +85,6 @@ prof.to_sklearn_pipeline_code()
 - Drift reports with schema changes, target movement, and per-column distribution
   changes.
 - Optional HTML reports and saved JSON artifacts.
-
-Use `ydata-profiling`, SweetViz, or DataPrep when you want a broad descriptive
-profile. Use `biopsy` when you want a short ranked report before training a model.
 
 ## Install
 
