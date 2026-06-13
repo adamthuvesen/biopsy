@@ -23,7 +23,7 @@ from biopsy.stats import compute_all
 
 app = typer.Typer(
     name="biopsy",
-    help="Instant, opinionated EDA in the terminal.",
+    help="Opinionated, ranked EDA for the first pass before training a model.",
     no_args_is_help=True,
     add_completion=False,
 )
