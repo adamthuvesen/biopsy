@@ -20,9 +20,7 @@ the handful of things that will break your model. Leakage is the clearest case.
 backfilled from the outcome, but only for the most recent ~30% of users, so it
 looks like a healthy feature. ydata-profiling shows it as 1 of 15 cards with a
 generic **High correlation** badge — one of 14 unranked alerts, the same badge it
-gives benign pairs. It never splits on time, so it can't tell a leak from signal:
-
-![ydata-profiling's card for cohort_engagement_v2 — a healthy numeric column with a High correlation badge, no leak warning](assets/ydata-cohort-engagement.png)
+gives benign pairs. It never splits on time, so it can't tell a leak from signal.
 
 `biopsy` ranks the same column **CRITICAL**, at the top of the report:
 
