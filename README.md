@@ -1,5 +1,7 @@
 # biopsy
 
+![biopsy — a forensic profile of demo.csv: "Heavy leakage. Two columns must go before you train." Health score 45/100 critical, severity tally 2/3/10, and a ranked target-signal chart with days_since_last_login flagged as a leak at score 1.00](assets/hero.webp)
+
 `biopsy` is a Python library and CLI for the first EDA pass before you train a
 model. Point it at a CSV, Parquet file, dataframe, or warehouse table and it
 returns a short ranked report: the columns worth checking first, the likely
