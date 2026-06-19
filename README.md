@@ -1,7 +1,5 @@
 # biopsy
 
-![biopsy — a forensic profile of demo.csv: "Heavy leakage. Two columns must go before you train." Health score 45/100 critical, severity tally 2/3/10, and a ranked target-signal chart with days_since_last_login flagged as a leak at score 1.00](assets/hero.webp)
-
 `biopsy` is a Python library and CLI for the first EDA pass before you train a
 model. Point it at a CSV, Parquet file, dataframe, or warehouse table and it
 returns a short ranked report: the columns worth checking first, the likely
@@ -11,6 +9,8 @@ and a preprocessing plan it can emit as runnable sklearn code.
 It is opinionated on purpose: a descriptive profiler shows you everything about
 every column; biopsy ranks the dozen things that matter for the model and says
 what to do about them.
+
+![biopsy — a forensic profile of demo.csv: "Heavy leakage. Two columns must go before you train." Health score 45/100 critical, severity tally 2/3/10, and a ranked target-signal chart with days_since_last_login flagged as a leak at score 1.00](assets/hero.webp)
 
 ## Why not ydata-profiling?
 
@@ -22,9 +22,7 @@ the handful of things that will break your model. Leakage is the clearest case.
 backfilled from the outcome, but only for the most recent ~30% of users, so it
 looks like a healthy feature. ydata-profiling shows it as 1 of 15 cards with a
 generic **High correlation** badge — one of 14 unranked alerts, the same badge it
-gives benign pairs. It never splits on time, so it can't tell a leak from signal:
-
-![ydata-profiling's card for cohort_engagement_v2 — a healthy numeric column with a High correlation badge, no leak warning](assets/ydata-cohort-engagement.png)
+gives benign pairs. It never splits on time, so it can't tell a leak from signal.
 
 `biopsy` ranks the same column **CRITICAL**, at the top of the report:
 
