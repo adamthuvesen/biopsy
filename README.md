@@ -10,6 +10,76 @@ It is opinionated on purpose: a descriptive profiler shows you everything about
 every column; biopsy ranks the dozen things that matter for the model and says
 what to do about them.
 
+## Status and limitations
+
+`biopsy` is early software. Install it from source. It is not on PyPI yet.
+
+The built-in demo uses synthetic data and no secrets. Warehouse support is
+read-only, but credentials and network access are still your responsibility.
+Treat the findings as review prompts, not automatic data-science decisions.
+
+## Quickstart
+
+Requires Python 3.11+.
+
+```bash
+git clone https://github.com/adamthuvesen/biopsy.git
+cd biopsy
+uv venv && source .venv/bin/activate
+uv pip install -e .
+biopsy demo --rows 1000 --no-html
+```
+
+The demo writes a temporary CSV, profiles it, and prints the ranked report:
+
+```text
+demo.csv  1,000 rows
+biopsy  demo.csv   1,000 rows × 15 cols   target churned
+
+─────────────────────────────────── Findings ───────────────────────────────────
+ ■  `days_since_last_login` may leak the target (score=1.00)
+    Predictive score against `churned` is suspiciously high. Check whether this
+column was computed from the target.
+ ■  `cohort_engagement_v2` may leak future information
+    Random-CV predictive signal (0.34) but time-ordered split scores near zero
+(0.00) with strong drift (KS=0.50).
+ ▲  `status` is constant
+ ▲  `constant_col` is constant
+ ▲  `user_id` looks like an identifier
+
+──────────────────────────── Action plan → churned ─────────────────────────────
+  type         column                  action
+  drop         status                  drop
+  drop         constant_col            drop
+  drop         user_id                 drop
+  transform    revenue                 log1p
+  impute       income                  median
+  review       days_since_last_login   review
+  review       cohort_engagement_v2    review
+```
+
+Other common commands:
+
+```bash
+biopsy profile data.parquet --target label
+biopsy profile data.parquet --target label --html report.html --pipeline preprocess.py
+biopsy compare train.parquet eval.parquet --target label
+biopsy doctor data.parquet
+```
+
+Python API:
+
+```python
+from biopsy import profile
+
+prof = profile("training.parquet", target="label", time_col="event_time")
+
+prof.top_findings()
+prof.feature_shortlist(limit=20)
+prof.action_plan()
+prof.to_sklearn_pipeline_code()
+```
+
 ## Why not ydata-profiling?
 
 Different job. `ydata-profiling`, SweetViz, and DataPrep *describe* every column —
@@ -52,24 +122,6 @@ uv venv /tmp/ydata && uv pip install --python /tmp/ydata/bin/python ydata-profil
 
 </details>
 
-```bash
-biopsy profile data.parquet --target label
-biopsy profile data.parquet --target label --html report.html --pipeline preprocess.py
-biopsy compare train.parquet eval.parquet --target label
-biopsy doctor data.parquet
-```
-
-```python
-from biopsy import profile
-
-prof = profile("training.parquet", target="label", time_col="event_time")
-
-prof.top_findings()
-prof.feature_shortlist(limit=20)
-prof.action_plan()
-prof.to_sklearn_pipeline_code()
-```
-
 ## What it reports
 
 - Ranked findings: leakage, drift, nulls, outliers, IDs, suspicious date strings,
@@ -84,18 +136,7 @@ prof.to_sklearn_pipeline_code()
   changes.
 - Optional HTML reports and saved JSON artifacts.
 
-## Install
-
-Requires Python 3.11+. It is not on PyPI yet, so install from source:
-
-```bash
-git clone <repo>
-cd biopsy
-uv venv && source .venv/bin/activate
-uv pip install -e .
-```
-
-Optional extras:
+## Optional extras
 
 ```bash
 uv pip install -e ".[dataframe]"   # pandas, polars, pyarrow
