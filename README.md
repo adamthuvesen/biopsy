@@ -10,7 +10,7 @@ It is opinionated on purpose: a descriptive profiler shows you everything about
 every column; biopsy ranks the dozen things that matter for the model and says
 what to do about them.
 
-![biopsy — a forensic profile of demo.csv: "Heavy leakage. Two columns must go before you train." Health score 45/100 critical, severity tally 2/3/10, and a ranked target-signal chart with days_since_last_login flagged as a leak at score 1.00](assets/hero.webp)
+<img src="assets/hero.webp" width="720" alt="biopsy — a forensic profile of demo.csv: &quot;Heavy leakage. Two columns must go before you train.&quot; Health score 45/100 critical, severity tally 2/3/10, and a ranked target-signal chart with days_since_last_login flagged as a leak at score 1.00">
 
 ## Why not ydata-profiling?
 
