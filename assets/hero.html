@@ -85,7 +85,11 @@
   .finding .desc{font-size:17px; color:var(--ink2); line-height:1.5; margin-top:14px; max-width:640px;}
 
   /* ---- right rail ---- */
-  .rail{display:flex; flex-direction:column; gap:30px;}
+  .rail{display:flex; flex-direction:column; gap:34px;}
+
+  .aside-note{margin-top:6px; padding-top:30px; border-top:1px solid var(--line);}
+  .aside-note p{font-family:var(--serif); font-size:32px; line-height:1.18; color:var(--ink); letter-spacing:-.2px;}
+  .aside-note span{display:block; font-size:15px; line-height:1.55; color:var(--ink3); margin-top:16px; max-width:400px;}
 
   .score{display:flex; align-items:center; gap:26px; padding-bottom:30px; border-bottom:1px solid var(--line);}
   .gauge{position:relative; width:150px; height:150px; flex:none;}
@@ -181,14 +185,9 @@
           <div class="pill info"><div class="n">10</div><div class="k">info</div></div>
         </div>
 
-        <div class="signal">
-          <div class="cap">Target signal · churned <span>predictive power</span></div>
-          <div class="row leak"><div class="name">days_since_last_login</div><div class="track"><div class="bar" style="width:100%"></div></div><div class="pct">1.00</div></div>
-          <div class="row"><div class="name">cohort_engagement_v2</div><div class="track"><div class="bar" style="width:46%"></div></div><div class="pct">0.46</div></div>
-          <div class="row"><div class="name">revenue</div><div class="track"><div class="bar" style="width:31%"></div></div><div class="pct">0.31</div></div>
-          <div class="row"><div class="name">age</div><div class="track"><div class="bar" style="width:22%"></div></div><div class="pct">0.22</div></div>
-          <div class="row"><div class="name">n_logins</div><div class="track"><div class="bar" style="width:17%"></div></div><div class="pct">0.17</div></div>
-          <div class="row"><div class="name">tenure_months</div><div class="track"><div class="bar" style="width:14%"></div></div><div class="pct">0.14</div></div>
+        <div class="aside-note">
+          <p>A perfect predictor is a confession, not a feature.</p>
+          <span>biopsy ranks the dozen things that decide the model — then says what to do about each.</span>
         </div>
       </aside>
     </main>
