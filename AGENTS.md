@@ -1,108 +1,86 @@
 # AGENTS.md — biopsy
 
-Project-specific instructions for AI coding agents working on this repo. The user's global `~/dotfiles/agents/AGENTS.md` applies on top — this file overrides for biopsy-specific concerns.
+`biopsy` is an opinionated EDA library + CLI. Point it at a CSV or Parquet and
+get a ranked report of what matters for modeling — distributions, nulls,
+outliers, non-linear correlations, target signal, temporal leakage, redundancy
+clustering, drift comparison, and a runnable sklearn preprocessor + split/CV
+recommendation. Differentiator vs `ydata-profiling` / `SweetViz` / `DataPrep`:
+**ranking + opinion + action**.
 
-## What this is
-
-`biopsy` is an opinionated EDA library + CLI. Point it at a CSV or Parquet, get a ranked report of what matters for modeling — distributions, nulls, outliers, non-linear correlations, target signal (multi-metric), temporal leakage, redundancy clustering, drift comparison, and an executable action plan.
-
-Audience: a data scientist running an initial pass before training a model. Differentiator vs `ydata-profiling` / `SweetViz` / `DataPrep`: **ranking + opinion + action** — the top dozen things to look at, plus a runnable sklearn preprocessor and a split/CV recommendation.
+User-level guidance (tone, principles, git etiquette) lives in
+`~/.claude/CLAUDE.md` and `~/dotfiles/agents/AGENTS.md` and is *not* duplicated
+here. This file is for project-specific facts.
 
 ## Layout
 
 ```
 src/biopsy/
 ├── io.py            # DuckDB loader, --filter parser, --exclude
-├── stats.py         # per-column SQL aggregates, histograms, batched base counts
-├── correlations.py  # Pearson, MI, PPS, Spearman, AUC, perm importance, bootstrap CIs
-├── clustering.py    # Spearman-distance hierarchical clustering, shortlist
-├── temporal.py      # temporal leakage, drift, monotonicity, target drift
-├── findings.py      # ranked findings synthesis + smart detectors
-├── action_plan.py   # drop / impute / encode / transform / split / cv + sklearn codegen
-├── compare.py       # profile-to-profile drift (KS / Wasserstein / PSI / χ² / JS)
-├── targets.py       # target column typing shared across profiling/correlations/temporal
-├── inference.py     # heuristics for target/time candidates, ID detection, doctor hints
-├── matrix.py        # shared sampled matrices for one profile run
-├── serialize.py     # JSON-safe serialization helpers for public report objects
-├── demo.py          # synthetic dataset generator
-├── sparkline.py     # unicode sparklines for terminal
-├── profile/         # orchestrator + public API (was profile.py)
-│   ├── run.py       # profiling pipeline orchestrator
-│   ├── model.py     # Profile / ProfileDiff dataclasses
-│   ├── diff.py      # finding-level diff between profiles
-│   └── serde.py     # profile <-> JSON load/save
-├── cli/             # Typer CLI (was cli.py) — one module per command
-│   ├── profile_cmd.py / compare_cmd.py / diff_cmd.py / doctor_cmd.py
-│   ├── init_cmd.py / demo_cmd.py / notebook.py
-│   ├── config.py    # biopsy.toml parsing + CONFIG_KNOWN_KEYS (keep aligned with CLI flags)
-│   └── common.py    # shared option types + credential plumbing
-├── warehouse/       # remote sources: postgres, bigquery, snowflake (+ object_store, doctor)
-├── render/
-│   ├── terminal.py  # Rich terminal report (100-char cap layout)
-│   ├── charts.py    # Plotly chart builders
-│   └── html.py      # Plotly + Jinja HTML report and compare report
-└── templates/
-    ├── report.html.j2
-    └── compare.html.j2
-tests/                          # split from the old test_smoke.py into domain modules
-├── test_smoke.py               # core-path smoke + regression tests for fixed bugs
-├── test_temporal.py / test_correlations.py / test_action_plan.py
-├── test_findings_quality.py / test_compare.py / test_render.py / test_cli.py
-├── test_profile_pipeline.py / test_filter_and_io.py
-└── test_warehouse*.py          # postgres (docker-compose), bigquery, snowflake, readonly
+├── stats.py         # per-column SQL aggregates, histograms
+├── correlations.py  # Pearson, MI, PPS, Spearman, AUC, perm importance
+├── clustering.py    # Spearman-distance clustering + shortlist
+├── temporal.py      # leakage, drift, monotonicity, target drift
+├── findings.py      # ranked findings synthesis + detectors
+├── action_plan.py   # drop/impute/encode/transform/split/cv + sklearn codegen
+├── compare.py       # profile-to-profile drift
+├── profile/         # orchestrator + public API (Profile dataclasses, serde)
+├── cli/             # Typer CLI, one module per command
+├── warehouse/       # remote sources: postgres, bigquery, snowflake
+├── render/          # terminal (Rich), charts + html (Plotly/Jinja)
+└── templates/       # report.html.j2, compare.html.j2
+tests/               # domain-split suites + test_warehouse*.py
 ```
 
-CI runs GitHub Actions on branch pushes; the suite plus a `ruff format --check` gate must pass.
+Per-file detail is in [docs/architecture.md](docs/architecture.md).
 
-## Stack + conventions
-
-- **Python 3.11+**, managed with `uv`. Source under `src/`, package name `biopsy`.
-- **DuckDB-first**: column stats and Pearson correlations are computed in SQL. Use `_quote_ident(col)` (in `io.py`) and `_quote(col)` (in `stats.py`) for identifiers; `_lit(value, is_numeric)` for literals.
-- **sklearn** for MI / PPS / AUC / permutation importance / bootstrap CIs. **scipy** for `spearmanr`, `ks_2samp`, `chi2_contingency`. **plotly + jinja2** for HTML. **rich + typer** for CLI.
-- Type hints everywhere. Avoid generic `except Exception:` unless the failure is genuinely recoverable and documented (silent failures hid a real bug in the v0.1 review).
-- Severity vocabulary: `critical` / `warning` / `info`. Categories: `leakage`, `suspicious`, `quality`, `distribution`, `correlation`, `target`, `temporal`, `drift`.
-
-## Things to know before changing code
-
-1. **Filter parser** (`io.parse_filter_expr`) — symbolic ops (`==`, `!=`, `>=`, `<=`, `>`, `<`) are tried *leftmost-first* before keyword ops (`in`, `not in`, `is null`, `is not null`). Keyword ops require strict whitespace boundaries on both sides. Quoted segments are skipped. Don't reorder without rerunning `test_h3_filter_parser_symbolic_before_keyword`.
-
-2. **`USING SAMPLE` ordering** (`io.load`) — DuckDB applies `USING SAMPLE` to the table source *before* `WHERE`. To sample *after* filtering, wrap the filtered SELECT in a subquery. See `test_h1_sample_after_filter`.
-
-3. **`_spearman`** (`correlations.py`) — uses `scipy.stats.spearmanr` with `nan_policy="omit"`. Do not revert to `argsort(argsort(x))` — that doesn't tie-correct and produces spurious correlations on near-constant inputs.
-
-4. **Smart-sort for degenerate PPS** — when max PPS < 0.05 across all features, `target_signal()` falls back to sorting by `TargetSignal.best_score`. That property includes PPS / MI / AUC / perm_importance but **excludes** Spearman (matches `clustering._score_for_ranking`). Change both together.
-
-5. **Permutation-importance index alignment** (`correlations._attach_permutation_importance`) — `feat_in_target = fmask[target_mask]` is well-defined because `fmask ⊆ target_mask`. `kept_signal_idx` maps cols back to `signals` for features that had ≥30 valid rows; don't index `signals[:len(normalized)]`.
-
-6. **Temporal column resolution** (`temporal.resolve_time_column`) — auto-detects when exactly one column has `kind == "temporal"`. With multiple, emits an info finding asking for `--time`. Skipped entirely when `n_unique < 10`; low-cardinality bucket mode handles 3–9 buckets via the bucket aggregator.
-
-7. **Target drift kinds** (`temporal._target_drift`) — four kinds: `binary`, `multiclass`, `regression_ratio`, `regression_diff`. `is_target_drifted()` and the renderers in `findings.py` must handle all four.
-
-8. **Temporal leakage classification** (`temporal._classify`) — sets `TemporalSignal.leakage_kind` (`random_cv`, `post_event`, `drift`, `strong_drift`, `monotonic`, or `none`). `findings.temporal_findings` maps `random_cv` and `post_event` to `category="leakage"`. Saved profiles without `leakage_kind` are back-filled via `temporal.infer_leakage_kind_from_legacy` in `temporal_signal_from_payload`.
-
-9. **Action plan single-source-of-truth** (`action_plan.py`) — HTML, terminal, and `to_sklearn_pipeline_code()` all consume `Profile.action_plan()`. Don't duplicate the drop/impute/encode/transform logic anywhere else.
-
-10. **Compare guards on noisy categoricals** (`compare._categorical_drift`) — skips drift computation when `n_unique / nonnull > 0.5` (IDs, free text) or when top-K coverage of either side is < 25% (high-card categoricals where top values are sampling noise).
-
-## Run / test
+## Quickstart
 
 ```bash
-# install dev environment (uv, Python 3.11+ venv)
 uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e ".[dev]"          # dev environment
 
-# run the test suite
-uv run python -m pytest tests/ -q
+uv run python -m pytest tests/ -q   # test suite
+uv run ruff check .                 # lint
+uv run ruff format --check .        # format gate
 
-# CLI smoke
-biopsy demo --rows 5000                # synthetic dataset
-biopsy profile data.parquet --target y # real dataset
-biopsy compare a.parquet b.parquet     # drift
-biopsy diff a.json b.json              # finding-level diff
-biopsy doctor data.parquet             # quick schema + candidates
-biopsy profile --help                  # all flags
+biopsy demo --rows 5000             # synthetic dataset
+biopsy profile data.parquet --target y
+biopsy compare a.parquet b.parquet  # drift
+biopsy diff a.json b.json           # finding-level diff
+biopsy doctor data.parquet          # quick schema + candidates
 ```
 
-## Engram / memory
+## Critical Conventions
 
-When discoveries here are worth surviving a tool switch, write to **Engram** with `project=biopsy`. Tool-native memory (Claude/Codex) is for repo-local context.
+- **Python 3.11+, `uv`-managed.** Source under `src/`, package name `biopsy`.
+- **DuckDB-first.** Column stats and Pearson correlations are computed in SQL.
+  Use `_quote_ident(col)` (in [src/biopsy/io.py](src/biopsy/io.py)) and
+  `_quote(col)` (in [src/biopsy/stats.py](src/biopsy/stats.py)) for identifiers;
+  `_lit(value, is_numeric)` for literals — never string-interpolate.
+- **Library split.** sklearn for MI / PPS / AUC / permutation importance /
+  bootstrap CIs; scipy for `spearmanr`, `ks_2samp`, `chi2_contingency`;
+  plotly + jinja2 for HTML; rich + typer for CLI.
+- **No blanket `except Exception:`** unless the failure is genuinely recoverable
+  and documented — silent failures hid a real bug in the v0.1 review.
+- **Severity vocabulary:** `critical` / `warning` / `info`. Categories:
+  `leakage`, `suspicious`, `quality`, `distribution`, `correlation`, `target`,
+  `temporal`, `drift`.
+- **`biopsy.toml` keys** in [src/biopsy/cli/config.py](src/biopsy/cli/config.py)
+  (`CONFIG_KNOWN_KEYS`) must stay aligned with CLI flags.
+- **Never commit secrets, `.env`, or AI-attribution lines.**
+
+## Read The Docs First
+
+Before changing a subsystem, read the matching doc:
+
+- **Module architecture / per-file map** → [docs/architecture.md](docs/architecture.md)
+- **Non-obvious algorithm + ordering gotchas** (filter parser, `USING SAMPLE`,
+  Spearman tie-correction, perm-importance index alignment, leakage
+  classification, action-plan SoT, …) → [docs/gotchas.md](docs/gotchas.md)
+
+If a doc disagrees with code, fix the doc in the same change.
+
+## Index
+
+Start in [docs/architecture.md](docs/architecture.md), then read
+[docs/gotchas.md](docs/gotchas.md) before touching any algorithm.
