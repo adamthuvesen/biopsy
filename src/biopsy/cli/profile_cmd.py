@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-import tempfile
-import webbrowser
 from pathlib import Path
 
 import typer
 from rich.console import Console
 
 import biopsy.cli as cli
-from biopsy.cli.common import USER_ERRORS, clean_exit_on_user_error, maybe_warn_warehouse_sample
+from biopsy.cli.common import (
+    USER_ERRORS,
+    clean_exit_on_user_error,
+    default_profile_html_path,
+    maybe_warn_warehouse_sample,
+    open_browser_if_requested,
+    print_artifact_path,
+    write_text_artifact,
+)
 from biopsy.cli.config import (
     bool_option,
     coalesce,
@@ -192,21 +198,14 @@ def profile_cmd(
 
     if save:
         saved = prof.save(save)
-        console.print(f"\n[dim]Profile JSON:[/dim] {saved}")
+        print_artifact_path(console, "Profile JSON", saved, blank_before=True)
 
     if pipeline:
-        pipeline_path = Path(pipeline).expanduser().resolve()
-        pipeline_path.parent.mkdir(parents=True, exist_ok=True)
-        pipeline_path.write_text(prof.to_sklearn_pipeline_code(), encoding="utf-8")
-        console.print(f"\n[dim]Sklearn pipeline:[/dim] {pipeline_path}")
+        pipeline_path = write_text_artifact(pipeline, prof.to_sklearn_pipeline_code())
+        print_artifact_path(console, "Sklearn pipeline", pipeline_path, blank_before=True)
 
     if html or open_browser:
-        # Derive a clean default filename from the source's display name.
-        # source_name is `Path.name` for files and the last URI segment for
-        # warehouse sources — `.stem` strips a trailing extension if any.
-        stem = Path(prof.source_name).stem or "report"
-        out = html if html is not None else (Path(tempfile.gettempdir()) / f"biopsy-{stem}.html")
+        out = html if html is not None else default_profile_html_path(prof.source_name)
         rendered = render_html(prof, out, embed_plotly=not plotly_cdn)
-        console.print(f"\n[dim]HTML report:[/dim] {rendered}")
-        if open_browser:
-            webbrowser.open(rendered.as_uri())
+        print_artifact_path(console, "HTML report", rendered, blank_before=True)
+        open_browser_if_requested(rendered, enabled=open_browser)

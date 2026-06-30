@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
-import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +10,14 @@ import typer
 from rich.console import Console
 
 import biopsy.cli as cli
-from biopsy.cli.common import USER_ERRORS, clean_exit_on_user_error, maybe_warn_warehouse_sample
+from biopsy.cli.common import (
+    USER_ERRORS,
+    clean_exit_on_user_error,
+    default_compare_html_path,
+    maybe_warn_warehouse_sample,
+    open_browser_if_requested,
+    print_artifact_path,
+)
 from biopsy.profile import load_profile
 
 
@@ -70,35 +75,18 @@ def compare_cmd(
     cli._print_compare(console, report)
 
     if save:
-        import json as _json
-
-        from biopsy.serialize import to_jsonable
-
-        payload = {
-            "a_name": report.a_name,
-            "b_name": report.b_name,
-            "schema": to_jsonable(report.schema),
-            "drifts": [to_jsonable(d) for d in report.drifts],
-            "target": to_jsonable(report.target) if report.target else None,
-            "findings": [to_jsonable(f) for f in report.findings],
-        }
-        save_path = Path(save).expanduser().resolve()
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        save_path.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        console.print(f"\n[dim]Compare JSON:[/dim] {save_path}")
+        save_path = report.save(save)
+        print_artifact_path(console, "Compare JSON", save_path, blank_before=True)
 
     if html or open_browser:
-        a_stem = Path(prof_a.source_name).stem or "a"
-        b_stem = Path(prof_b.source_name).stem or "b"
         out = (
             html
             if html is not None
-            else (Path(tempfile.gettempdir()) / f"biopsy-compare-{a_stem}-{b_stem}.html")
+            else default_compare_html_path(prof_a.source_name, prof_b.source_name)
         )
         rendered = render_compare(prof_a, prof_b, report, out, embed_plotly=not plotly_cdn)
-        console.print(f"\n[dim]HTML report:[/dim] {rendered}")
-        if open_browser:
-            webbrowser.open(rendered.as_uri())
+        print_artifact_path(console, "HTML report", rendered, blank_before=True)
+        open_browser_if_requested(rendered, enabled=open_browser)
 
 
 def load_side(
