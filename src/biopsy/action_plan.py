@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from biopsy.findings import Finding
     from biopsy.profile import Profile
+    from biopsy.stats import ColumnStats
 
 Severity = Literal["critical", "warning", "info"]
 EncodingChoice = Literal["onehot", "ordinal", "target_oof", "hash"]
@@ -127,194 +129,9 @@ def build_action_plan(prof: Profile) -> ActionPlan:
     encode: dict[str, ActionItem] = {}
     impute: dict[str, ActionItem] = {}
 
-    for f in prof.findings:
-        if not f.columns:
-            continue
-        col = f.columns[0]
-        # Suppress drop suggestions on the target.
-        if col == prof.target and f.category != "leakage":
-            continue
-
-        title = f.title.replace("`", "")
-        reason = title
-
-        # --- drop bucket: empty, constant, near-constant, ID-shaped,
-        #     critical quality ----------------------------------------------
-        is_drop_kind = f.kind in _DROP_KINDS or (
-            not f.kind and any(m in f.title for m in _DROP_TITLE_MARKERS)
-        )
-        if is_drop_kind:
-            _add(
-                drop,
-                col,
-                ActionItem(
-                    column=col,
-                    action="drop",
-                    reason=reason,
-                    severity=f.severity,
-                    evidence=[title],
-                ),
-            )
-            continue
-        if f.category == "quality" and f.severity == "critical":
-            _add(
-                drop,
-                col,
-                ActionItem(
-                    column=col,
-                    action="drop",
-                    reason=reason,
-                    severity=f.severity,
-                    evidence=[title],
-                ),
-            )
-            continue
-
-        # --- review bucket: leakage / temporal / target issues -------------
-        if f.category in _REVIEW_CATEGORIES and f.severity in {"critical", "warning"}:
-            _add(
-                review,
-                col,
-                ActionItem(
-                    column=col,
-                    action="review",
-                    reason=reason,
-                    severity=f.severity,
-                    evidence=[title],
-                ),
-            )
-            continue
-
-        # --- distribution → transform suggestions --------------------------
-        if f.category == "distribution":
-            stats = prof.columns.get(col)
-            is_skewed = (
-                stats is not None
-                and stats.kind == "numeric"
-                and stats.skew is not None
-                and abs(stats.skew) > 3
-            )
-            if is_skewed:
-                positive_only = stats.min is not None and stats.min >= 0
-                action = "log1p" if positive_only else "yeo_johnson"
-            else:
-                action = "robust_scaler"
-            _add(
-                transform,
-                col,
-                ActionItem(
-                    column=col,
-                    action=action,
-                    reason=reason,
-                    severity=f.severity,
-                    evidence=[title],
-                ),
-            )
-            continue
-
-        # --- encoded null sentinels → review (replace before profile) ------
-        is_encoded_nulls = f.kind == "encoded_nulls" or (not f.kind and "encoded nulls" in f.title)
-        if is_encoded_nulls:
-            _add(
-                review,
-                col,
-                ActionItem(
-                    column=col,
-                    action="replace_sentinel_with_null",
-                    reason=reason,
-                    severity=f.severity,
-                    evidence=[title],
-                ),
-            )
-            continue
-
-    # --- impute bucket: any non-target column with null_rate in (0, 1) -----
-    for stats in prof.columns.values():
-        if stats.name == prof.target:
-            continue
-        if stats.name in drop:
-            continue
-        if stats.null_rate <= 0 or stats.null_rate >= 1:
-            continue
-        if stats.kind == "numeric":
-            # Heavily skewed → median. Bool-like → mode. Otherwise median.
-            action: ImputeChoice = "median"
-            if stats.n_unique <= 2:
-                action = "mode"
-        elif stats.kind in {"text", "bool"}:
-            action = "mode"
-        else:
-            # temporal / other: forward-fill is dataset-specific. Surface it
-            # in the `review` bucket so the gap doesn't disappear silently.
-            review_reason = (
-                f"{stats.null_rate:.0%} of rows are null on a {stats.kind} column — "
-                "biopsy cannot recommend an impute strategy automatically."
-            )
-            _add(
-                review,
-                stats.name,
-                ActionItem(
-                    column=stats.name,
-                    action="impute_manually",
-                    reason=review_reason,
-                    severity="warning" if stats.null_rate > 0.1 else "info",
-                    evidence=[review_reason],
-                ),
-            )
-            continue
-        reason = f"{stats.null_rate:.0%} of rows are null"
-        _add(
-            impute,
-            stats.name,
-            ActionItem(
-                column=stats.name,
-                action=action,
-                reason=reason,
-                severity="warning" if stats.null_rate > 0.1 else "info",
-                evidence=[reason],
-            ),
-        )
-
-    # --- encode bucket: categorical features (skip target, skip dropped) ---
-    for stats in prof.columns.values():
-        if stats.name == prof.target:
-            continue
-        if stats.name in drop:
-            continue
-        if stats.kind not in {"text", "bool"}:
-            continue
-        n_unique = stats.n_unique
-        if n_unique <= 1:
-            continue
-        nonnull = stats.n - stats.n_null
-        unique_rate = n_unique / nonnull if nonnull else 0.0
-        if n_unique <= 2:
-            choice: EncodingChoice = "ordinal"
-            why = "binary categorical"
-        elif n_unique <= 20:
-            choice = "onehot"
-            why = f"low-cardinality ({n_unique} levels)"
-        elif unique_rate > 0.5:
-            # Near-unique strings — likely free text or IDs. Skip encoding;
-            # the drop / suspicious findings should already cover this.
-            continue
-        else:
-            choice = "target_oof"
-            why = (
-                f"high cardinality ({n_unique:,} levels) — use out-of-fold "
-                "target encoding to avoid leakage"
-            )
-        _add(
-            encode,
-            stats.name,
-            ActionItem(
-                column=stats.name,
-                action=choice,
-                reason=why,
-                severity="info",
-                evidence=[why],
-            ),
-        )
+    _add_finding_actions(prof, drop=drop, review=review, transform=transform)
+    _add_impute_actions(prof, dropped=drop, review=review, impute=impute)
+    _add_encode_actions(prof, dropped=drop, encode=encode)
 
     # --- split & cv & class strategy ---------------------------------------
     split, cv = _recommend_split_and_cv(prof)
@@ -329,6 +146,213 @@ def build_action_plan(prof: Profile) -> ActionPlan:
         split=split,
         cv=cv,
         class_strategy=class_strategy,
+    )
+
+
+def _add_finding_actions(
+    prof: Profile,
+    *,
+    drop: dict[str, ActionItem],
+    review: dict[str, ActionItem],
+    transform: dict[str, ActionItem],
+) -> None:
+    buckets = {
+        "drop": drop,
+        "review": review,
+        "transform": transform,
+    }
+    for finding in prof.findings:
+        action = _action_from_finding(prof, finding)
+        if action is None:
+            continue
+        bucket, column, item = action
+        _add(buckets[bucket], column, item)
+
+
+def _action_from_finding(
+    prof: Profile,
+    finding: Finding,
+) -> tuple[Literal["drop", "review", "transform"], str, ActionItem] | None:
+    if not finding.columns:
+        return None
+    column = finding.columns[0]
+    if column == prof.target and finding.category != "leakage":
+        return None
+
+    title = finding.title.replace("`", "")
+    reason = title
+
+    is_drop_kind = finding.kind in _DROP_KINDS or (
+        not finding.kind and any(marker in finding.title for marker in _DROP_TITLE_MARKERS)
+    )
+    if is_drop_kind or (finding.category == "quality" and finding.severity == "critical"):
+        return (
+            "drop",
+            column,
+            ActionItem(
+                column=column,
+                action="drop",
+                reason=reason,
+                severity=finding.severity,
+                evidence=[title],
+            ),
+        )
+
+    if finding.category in _REVIEW_CATEGORIES and finding.severity in {"critical", "warning"}:
+        return (
+            "review",
+            column,
+            ActionItem(
+                column=column,
+                action="review",
+                reason=reason,
+                severity=finding.severity,
+                evidence=[title],
+            ),
+        )
+
+    if finding.category == "distribution":
+        action = _transform_action(prof.columns.get(column))
+        return (
+            "transform",
+            column,
+            ActionItem(
+                column=column,
+                action=action,
+                reason=reason,
+                severity=finding.severity,
+                evidence=[title],
+            ),
+        )
+
+    is_encoded_nulls = finding.kind == "encoded_nulls" or (
+        not finding.kind and "encoded nulls" in finding.title
+    )
+    if is_encoded_nulls:
+        return (
+            "review",
+            column,
+            ActionItem(
+                column=column,
+                action="replace_sentinel_with_null",
+                reason=reason,
+                severity=finding.severity,
+                evidence=[title],
+            ),
+        )
+    return None
+
+
+def _transform_action(stats: ColumnStats | None) -> str:
+    is_skewed = (
+        stats is not None
+        and stats.kind == "numeric"
+        and stats.skew is not None
+        and abs(stats.skew) > 3
+    )
+    if not is_skewed:
+        return "robust_scaler"
+    positive_only = stats.min is not None and stats.min >= 0
+    return "log1p" if positive_only else "yeo_johnson"
+
+
+def _add_impute_actions(
+    prof: Profile,
+    *,
+    dropped: dict[str, ActionItem],
+    review: dict[str, ActionItem],
+    impute: dict[str, ActionItem],
+) -> None:
+    for stats in prof.columns.values():
+        if stats.name == prof.target or stats.name in dropped:
+            continue
+        action = _impute_action(stats)
+        if action is None:
+            continue
+        bucket, item = action
+        if bucket == "review":
+            _add(review, stats.name, item)
+        else:
+            _add(impute, stats.name, item)
+
+
+def _impute_action(stats: ColumnStats) -> tuple[Literal["review", "impute"], ActionItem] | None:
+    if stats.null_rate <= 0 or stats.null_rate >= 1:
+        return None
+    if stats.kind == "numeric":
+        choice: ImputeChoice = "median"
+        if stats.n_unique <= 2:
+            choice = "mode"
+    elif stats.kind in {"text", "bool"}:
+        choice = "mode"
+    else:
+        reason = (
+            f"{stats.null_rate:.0%} of rows are null on a {stats.kind} column — "
+            "biopsy cannot recommend an impute strategy automatically."
+        )
+        return (
+            "review",
+            ActionItem(
+                column=stats.name,
+                action="impute_manually",
+                reason=reason,
+                severity="warning" if stats.null_rate > 0.1 else "info",
+                evidence=[reason],
+            ),
+        )
+
+    reason = f"{stats.null_rate:.0%} of rows are null"
+    return (
+        "impute",
+        ActionItem(
+            column=stats.name,
+            action=choice,
+            reason=reason,
+            severity="warning" if stats.null_rate > 0.1 else "info",
+            evidence=[reason],
+        ),
+    )
+
+
+def _add_encode_actions(
+    prof: Profile,
+    *,
+    dropped: dict[str, ActionItem],
+    encode: dict[str, ActionItem],
+) -> None:
+    for stats in prof.columns.values():
+        if stats.name == prof.target or stats.name in dropped:
+            continue
+        item = _encode_action(stats)
+        if item is not None:
+            _add(encode, stats.name, item)
+
+
+def _encode_action(stats: ColumnStats) -> ActionItem | None:
+    if stats.kind not in {"text", "bool"} or stats.n_unique <= 1:
+        return None
+    nonnull = stats.n - stats.n_null
+    unique_rate = stats.n_unique / nonnull if nonnull else 0.0
+    if stats.n_unique <= 2:
+        choice: EncodingChoice = "ordinal"
+        reason = "binary categorical"
+    elif stats.n_unique <= 20:
+        choice = "onehot"
+        reason = f"low-cardinality ({stats.n_unique} levels)"
+    elif unique_rate > 0.5:
+        return None
+    else:
+        choice = "target_oof"
+        reason = (
+            f"high cardinality ({stats.n_unique:,} levels) — use out-of-fold "
+            "target encoding to avoid leakage"
+        )
+    return ActionItem(
+        column=stats.name,
+        action=choice,
+        reason=reason,
+        severity="info",
+        evidence=[reason],
     )
 
 
