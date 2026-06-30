@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 import biopsy.cli as cli
+from biopsy.cli.common import print_artifact_path, write_text_artifact
 
 
 def notebook_cmd(
@@ -39,10 +40,8 @@ def notebook_cmd(
         cv_detail=cv_detail,
         class_detail=class_detail,
     )
-    output = Path(output).expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(notebook_json, encoding="utf-8")
-    console.print(f"[dim]Notebook:[/dim] {output}")
+    output = write_text_artifact(output, notebook_json)
+    print_artifact_path(console, "Notebook", output)
 
 
 def starter_notebook(

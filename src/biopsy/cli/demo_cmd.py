@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import tempfile
-import webbrowser
 from pathlib import Path
 
 import typer
 from rich.console import Console
 
 import biopsy.cli as cli
+from biopsy.cli.common import open_browser_if_requested, print_artifact_path
 from biopsy.demo import write_demo_csv
 from biopsy.profile import load_profile
 from biopsy.render.html import render as render_html
@@ -27,9 +27,8 @@ def render_saved_profile_cmd(
     console = Console()
     prof = load_profile(profile_json)
     rendered = render_html(prof, html, embed_plotly=not plotly_cdn)
-    console.print(f"[dim]HTML report:[/dim] {rendered}")
-    if open_browser:
-        webbrowser.open(rendered.as_uri())
+    print_artifact_path(console, "HTML report", rendered)
+    open_browser_if_requested(rendered, enabled=open_browser)
 
 
 def demo_cmd(
@@ -50,6 +49,5 @@ def demo_cmd(
     if html:
         out = tmpdir / "demo.html"
         rendered = render_html(prof, out)
-        console.print(f"\n[dim]HTML report:[/dim] {rendered}")
-        if open_browser:
-            webbrowser.open(rendered.as_uri())
+        print_artifact_path(console, "HTML report", rendered, blank_before=True)
+        open_browser_if_requested(rendered, enabled=open_browser)

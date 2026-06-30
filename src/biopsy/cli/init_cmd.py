@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 
 import biopsy.cli as cli
+from biopsy.cli.common import print_artifact_path, write_text_artifact
 from biopsy.inference import infer_excludes, infer_target, infer_time
 
 
@@ -40,19 +41,18 @@ def init_config_cmd(
     inferred_time = time_col or infer_time(stats)
     excludes = infer_excludes(stats, target=inferred_target, time_col=inferred_time)
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
+    output = write_text_artifact(
+        output,
         init_config_text(
             source=path,
             target=inferred_target,
             time_col=inferred_time,
             excludes=excludes,
         ),
-        encoding="utf-8",
     )
 
     console = Console()
-    console.print(f"[dim]Wrote:[/dim] {output}")
+    print_artifact_path(console, "Wrote", output)
     if inferred_target:
         console.print(f"[dim]Target:[/dim] {inferred_target}")
     if inferred_time:

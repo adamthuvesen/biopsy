@@ -89,6 +89,7 @@ COLORWAY = ["#7C2D12", "#1E3A8A", "#3F6212", "#A16207", "#6B21A8", "#0E7490"]
 # --- plotly template -------------------------------------------------------
 
 _TEMPLATE_NAME = "biopsy"
+PLOTLY_JS_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 
 
 def _ensure_template() -> None:
@@ -253,7 +254,7 @@ def _bar_fig(s: ColumnStats) -> str:
     return _div(fig)
 
 
-def _target_fig(signals: list[TargetSignal], target: str) -> str:
+def _target_fig(signals: list[TargetSignal]) -> str:
     if not signals:
         return ""
     top = signals[:20]
@@ -553,15 +554,10 @@ def _quality_score(prof: Profile) -> tuple[int, str]:
 # --- template binding ------------------------------------------------------
 
 
-def _build_report_context(
-    prof: Profile,
-    *,
-    heatmap_limit: int = 60,
-) -> dict[str, Any]:
-    """Assemble Jinja context for the main profile report."""
-    columns_payload = []
+def _columns_payload(prof: Profile) -> list[dict[str, Any]]:
+    columns = []
     for s in prof.columns.values():
-        columns_payload.append(
+        columns.append(
             {
                 "stats": s,
                 "chart": column_chart_html(s),
@@ -569,14 +565,24 @@ def _build_report_context(
                 "is_time": s.name == prof.time_column,
             }
         )
+    return columns
 
+
+def _target_context(prof: Profile) -> dict[str, Any]:
     target_chart = ""
     target_prevalence_chart = ""
     if prof.target_signals:
-        target_chart = _target_fig(prof.target_signals, prof.target or "")
+        target_chart = _target_fig(prof.target_signals)
     if prof.target_summary and prof.target_summary.class_counts:
         target_prevalence_chart = _target_prevalence_fig(prof.target_summary.class_counts)
+    return {
+        "target_chart": target_chart,
+        "target_prevalence_chart": target_prevalence_chart,
+        "target_signals": prof.target_signals,
+    }
 
+
+def _temporal_context(prof: Profile) -> dict[str, Any]:
     temporal_chart = ""
     temporal_signals = []
     temporal_buckets = []
@@ -585,7 +591,14 @@ def _build_report_context(
         if prof.temporal.signals:
             temporal_chart = _temporal_fig(prof.temporal)
             temporal_signals = [s for s in prof.temporal.signals if s.severity != "none"]
+    return {
+        "temporal_chart": temporal_chart,
+        "temporal_signals": temporal_signals,
+        "temporal_buckets": temporal_buckets,
+    }
 
+
+def _cluster_context(prof: Profile) -> dict[str, Any]:
     shortlist_chart = ""
     clusters_payload = []
     shortlist_entries = []
@@ -604,23 +617,15 @@ def _build_report_context(
             }
             for c in prof.clusters.clusters
         ]
+    return {
+        "shortlist_chart": shortlist_chart,
+        "shortlist": shortlist_entries,
+        "clusters": clusters_payload,
+        "cluster_cutoff": prof.clusters.cutoff if prof.clusters else None,
+    }
 
-    pearson_heatmap = _heatmap_fig(
-        prof.correlations,
-        prof.columns,
-        "pearson",
-        max_features=heatmap_limit,
-    )
-    mi_heatmap = _heatmap_fig(
-        prof.correlations,
-        prof.columns,
-        "mutual_info",
-        max_features=heatmap_limit,
-    )
 
-    action_plan = prof.action_plan()
-
-    # Per-feature drilldown cards for the top-N shortlisted features.
+def _drilldown_cards(prof: Profile) -> list[dict[str, Any]]:
     drilldown_cards: list[dict[str, Any]] = []
     if prof.clusters is not None and prof.clusters.shortlist:
         sigs_by_feat = {s.feature: s for s in prof.target_signals}
@@ -641,11 +646,12 @@ def _build_report_context(
                     "top_corrs": top_corrs,
                 }
             )
-    quality_score, verdict = _quality_score(prof)
+    return drilldown_cards
 
-    # Severity tallies for the vital signs ribbon.
+
+def _quality_context(prof: Profile) -> dict[str, Any]:
+    quality_score, verdict = _quality_score(prof)
     sev_counts = severity_counts(prof.findings)
-    # Quality stats for the vitals: numeric/text/temporal split.
     kind_counts: dict[str, int] = {}
     null_total = 0
     for s in prof.columns.values():
@@ -653,33 +659,67 @@ def _build_report_context(
         null_total += s.n_null
     cells_total = prof.n_rows * max(prof.n_cols, 1)
     null_share = (null_total / cells_total) if cells_total else 0.0
-
-    verdict_cards = _verdict_cards(prof.findings)
-
     return {
-        "prof": prof,
-        "columns": columns_payload,
-        "target_chart": target_chart,
-        "target_prevalence_chart": target_prevalence_chart,
-        "target_signals": prof.target_signals,
-        "temporal_chart": temporal_chart,
-        "temporal_signals": temporal_signals,
-        "temporal_buckets": temporal_buckets,
-        "shortlist_chart": shortlist_chart,
-        "shortlist": shortlist_entries,
-        "clusters": clusters_payload,
-        "cluster_cutoff": prof.clusters.cutoff if prof.clusters else None,
-        "pearson_heatmap": pearson_heatmap,
-        "mi_heatmap": mi_heatmap,
-        "action_plan": action_plan,
-        "drilldown_cards": drilldown_cards,
         "quality_score": quality_score,
         "verdict": verdict,
         "sev_counts": sev_counts,
         "kind_counts": kind_counts,
         "null_share": null_share,
-        "verdict_cards": verdict_cards,
+        "verdict_cards": _verdict_cards(prof.findings),
+    }
+
+
+def _build_report_context(
+    prof: Profile,
+    *,
+    heatmap_limit: int = 60,
+) -> dict[str, Any]:
+    """Assemble Jinja context for the main profile report."""
+    pearson_heatmap = _heatmap_fig(
+        prof.correlations,
+        prof.columns,
+        "pearson",
+        max_features=heatmap_limit,
+    )
+    mi_heatmap = _heatmap_fig(
+        prof.correlations,
+        prof.columns,
+        "mutual_info",
+        max_features=heatmap_limit,
+    )
+
+    return {
+        "prof": prof,
+        "columns": _columns_payload(prof),
+        **_target_context(prof),
+        **_temporal_context(prof),
+        **_cluster_context(prof),
+        "pearson_heatmap": pearson_heatmap,
+        "mi_heatmap": mi_heatmap,
+        "action_plan": prof.action_plan(),
+        "drilldown_cards": _drilldown_cards(prof),
+        **_quality_context(prof),
         "severity_color": SEVERITY_COLOR,
+    }
+
+
+def _template_env() -> Environment:
+    tpl_dir = Path(__file__).parent.parent / "templates"
+    env = Environment(
+        loader=FileSystemLoader(tpl_dir),
+        autoescape=select_autoescape(["html"]),
+    )
+    env.filters["num"] = _num
+    env.filters["commafy"] = _commafy
+    env.filters["ticks"] = _ticks_filter
+    return env
+
+
+def _plotly_context(*, embed_plotly: bool, include_dark_palette: bool) -> dict[str, Any]:
+    return {
+        "plotly_cdn": None if embed_plotly else PLOTLY_JS_CDN,
+        "plotly_js": get_plotlyjs() if embed_plotly else None,
+        "palette": _palette(include_dark=include_dark_palette),
     }
 
 
@@ -690,20 +730,11 @@ def render_string(
     heatmap_limit: int = 60,
 ) -> str:
     _ensure_template()
-    tpl_dir = Path(__file__).parent.parent / "templates"
-    env = Environment(
-        loader=FileSystemLoader(tpl_dir),
-        autoescape=select_autoescape(["html"]),
-    )
-    env.filters["pct"] = lambda x: "—" if x == 0 else (f"{x:.0%}" if x >= 0.01 else "<1%")
-    env.filters["num"] = _num
-    env.filters["commafy"] = lambda x: f"{x:,}"
-    env.filters["ticks"] = _ticks_filter
+    env = _template_env()
+    env.filters["pct"] = _profile_pct_filter
 
     ctx = _build_report_context(prof, heatmap_limit=heatmap_limit)
-    ctx["plotly_cdn"] = None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js"
-    ctx["plotly_js"] = get_plotlyjs() if embed_plotly else None
-    ctx["palette"] = _palette(include_dark=True)
+    ctx.update(_plotly_context(embed_plotly=embed_plotly, include_dark_palette=True))
 
     tpl = env.get_template("report.html.j2")
     html = tpl.render(**ctx)
@@ -719,9 +750,7 @@ def render(
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
     html = render_string(prof, embed_plotly=embed_plotly, heatmap_limit=heatmap_limit)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(html, encoding="utf-8")
-    return output_path
+    return _write_html(output_path, html)
 
 
 def _compare_feature_fig(sa: ColumnStats, sb: ColumnStats) -> str:
@@ -793,15 +822,32 @@ def render_compare(
     embedding path as `render` so reports work offline.
     """
     _ensure_template()
-    tpl_dir = Path(__file__).parent.parent / "templates"
-    env = Environment(loader=FileSystemLoader(tpl_dir), autoescape=select_autoescape(["html"]))
-    env.filters["num"] = _num
-    env.filters["pct"] = lambda x: "—" if x is None else f"{x:+.2%}"
-    env.filters["sig"] = lambda x: "—" if x is None else f"{x:.3g}"
-    env.filters["ticks"] = _ticks_filter
-    env.filters["commafy"] = lambda x: f"{x:,}"
+    env = _template_env()
+    env.filters["pct"] = _compare_pct_filter
+    env.filters["sig"] = _sig_filter
     tpl = env.get_template("compare.html.j2")
-    # Pre-render per-feature comparison charts for the top-N drifted columns.
+    html = tpl.render(
+        a=prof_a,
+        b=prof_b,
+        report=report,
+        feature_cards=_compare_feature_cards(prof_a, prof_b, report),
+        **_plotly_context(embed_plotly=embed_plotly, include_dark_palette=False),
+    )
+    return _write_html(output_path, html)
+
+
+def _write_html(output_path: str | Path, html: str) -> Path:
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    return output_path
+
+
+def _compare_feature_cards(
+    prof_a: Profile,
+    prof_b: Profile,
+    report: object,
+) -> list[dict[str, Any]]:
     feature_cards = []
     top = getattr(report, "top", lambda n=12: [])(12)
     for d in top:
@@ -819,19 +865,7 @@ def render_compare(
                 "stats_b": sb,
             }
         )
-    html = tpl.render(
-        a=prof_a,
-        b=prof_b,
-        report=report,
-        feature_cards=feature_cards,
-        plotly_cdn=None if embed_plotly else "https://cdn.plot.ly/plotly-2.35.2.min.js",
-        plotly_js=get_plotlyjs() if embed_plotly else None,
-        palette=_palette(include_dark=False),
-    )
-    output_path = Path(output_path).expanduser().resolve()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(html, encoding="utf-8")
-    return output_path
+    return feature_cards
 
 
 def _verdict_cards(findings: list[Finding]) -> list[Finding]:
@@ -863,6 +897,24 @@ def _ticks_filter(value: str) -> Markup:
         last = m.end()
     parts.append(html_lib.escape(value[last:]))
     return Markup("".join(parts))
+
+
+def _profile_pct_filter(value: float) -> str:
+    if value == 0:
+        return "—"
+    return f"{value:.0%}" if value >= 0.01 else "<1%"
+
+
+def _compare_pct_filter(value: float | None) -> str:
+    return "—" if value is None else f"{value:+.2%}"
+
+
+def _sig_filter(value: float | None) -> str:
+    return "—" if value is None else f"{value:.3g}"
+
+
+def _commafy(value: Any) -> str:
+    return f"{value:,}"
 
 
 def _num(x: float | None) -> str:
