@@ -150,57 +150,137 @@ def temporal_signals(
     if t_stats is None or t_stats.kind != "temporal":
         return None
     if t_stats.n_unique < MIN_TIME_VALUES:
-        buckets = _time_bucket_summary(src, stats, time_col, target)
-        target_drift, target_drift_kind, target_drift_score = _target_drift_from_buckets(
-            buckets,
-            stats.get(target) if target else None,
-        )
-        return TemporalReport(
-            time_column=time_col,
-            target=target,
-            signals=[],
-            target_drift=target_drift,
-            target_drift_kind=target_drift_kind,
-            target_drift_score=target_drift_score,
-            time_buckets=buckets,
-            insufficient=(
-                f"Only {t_stats.n_unique} distinct value(s) in `{time_col}` — "
-                f"need ≥{MIN_TIME_VALUES} for leakage-style time-ordered splits. "
-                "Target-by-period drift was still computed."
-            ),
-        )
+        return _low_cardinality_time_report(src, stats, time_col, target, t_stats)
 
-    # Determine target kind early so we can pull the target alongside features.
-    target_kind: str | None = None
+    target_kind = _target_kind(stats, target)
+    features = _eligible_temporal_features(stats, time_col, target)
+    if not features:
+        return _insufficient_temporal_report(src, stats, time_col, target)
+
+    raw = _fetch_temporal_matrix(src, features, target, time_col, max_rows)
+    if raw.shape[0] < MIN_ROWS:
+        return None
+
+    time_values = raw[:, -1]
+    time_as_float = _time_to_float(time_values)
+    n = len(raw)
+    split_point, early_idx, late_idx, random_train_idx, random_test_idx = _temporal_splits(n)
+    y_full, target_valid = _prepare_temporal_target(
+        raw,
+        n_features=len(features),
+        target=target,
+        target_kind=target_kind,
+    )
+    results = _analyze_temporal_features(
+        raw=raw,
+        stats=stats,
+        features=features,
+        time_as_float=time_as_float,
+        split_point=split_point,
+        early_idx=early_idx,
+        late_idx=late_idx,
+        random_train_idx=random_train_idx,
+        random_test_idx=random_test_idx,
+        y_full=y_full,
+        target_valid=target_valid,
+        target_kind=target_kind,
+    )
+    signals = _collect_temporal_signals(results, time_col=time_col)
+    target_drift, target_drift_kind, target_drift_score = _target_drift_or_empty(
+        y_full,
+        target_valid,
+        target_kind,
+        time_as_float,
+    )
+
+    return TemporalReport(
+        time_column=time_col,
+        target=target,
+        signals=signals,
+        target_drift=target_drift,
+        target_drift_kind=target_drift_kind,
+        target_drift_score=target_drift_score,
+        time_buckets=_time_bucket_summary(src, stats, time_col, target),
+        insufficient=None,
+    )
+
+
+def _target_kind(stats: dict[str, ColumnStats], target: str | None) -> str | None:
     if target and target in stats:
-        target_kind = target_task_kind(stats[target])
+        return target_task_kind(stats[target])
+    return None
 
-    # Pick the feature set — same eligibility as target_signal.
-    features = [
+
+def _eligible_temporal_features(
+    stats: dict[str, ColumnStats],
+    time_col: str,
+    target: str | None,
+) -> list[str]:
+    return [
         name
         for name, s in stats.items()
         if name not in {time_col, target}
         and not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 100))
     ]
-    if not features:
-        return TemporalReport(
-            time_column=time_col,
-            target=target,
-            signals=[],
-            target_drift=None,
-            target_drift_kind=None,
-            target_drift_score=None,
-            time_buckets=_time_bucket_summary(src, stats, time_col, target),
-            insufficient="No eligible features for temporal analysis.",
-        )
 
+
+def _low_cardinality_time_report(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    time_col: str,
+    target: str | None,
+    time_stats: ColumnStats,
+) -> TemporalReport:
+    buckets = _time_bucket_summary(src, stats, time_col, target)
+    target_drift, target_drift_kind, target_drift_score = _target_drift_from_buckets(
+        buckets,
+        stats.get(target) if target else None,
+    )
+    return TemporalReport(
+        time_column=time_col,
+        target=target,
+        signals=[],
+        target_drift=target_drift,
+        target_drift_kind=target_drift_kind,
+        target_drift_score=target_drift_score,
+        time_buckets=buckets,
+        insufficient=(
+            f"Only {time_stats.n_unique} distinct value(s) in `{time_col}` — "
+            f"need ≥{MIN_TIME_VALUES} for leakage-style time-ordered splits. "
+            "Target-by-period drift was still computed."
+        ),
+    )
+
+
+def _insufficient_temporal_report(
+    src: Source,
+    stats: dict[str, ColumnStats],
+    time_col: str,
+    target: str | None,
+) -> TemporalReport:
+    return TemporalReport(
+        time_column=time_col,
+        target=target,
+        signals=[],
+        target_drift=None,
+        target_drift_kind=None,
+        target_drift_score=None,
+        time_buckets=_time_bucket_summary(src, stats, time_col, target),
+        insufficient="No eligible features for temporal analysis.",
+    )
+
+
+def _fetch_temporal_matrix(
+    src: Source,
+    features: list[str],
+    target: str | None,
+    time_col: str,
+    max_rows: int,
+) -> np.ndarray:
     cols_to_pull = features + ([target] if target else []) + [time_col]
     quoted = ", ".join(_quote(c) for c in cols_to_pull)
-
-    # Filter missing timestamps before sampling; DuckDB applies USING SAMPLE to
-    # the relation it is attached to.
-    raw = _fetch_object_array(
+    return _fetch_object_array(
         src.con,
         f"""
         SELECT {quoted}
@@ -212,39 +292,57 @@ def temporal_signals(
         """,
         cols_to_pull,
     )
-    if raw.shape[0] < MIN_ROWS:
-        return None
 
-    time_values = raw[:, -1]
-    time_as_float = _time_to_float(time_values)
-    n = len(raw)
+
+def _temporal_splits(
+    n: int,
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     split_point = int(n * (1 - TEST_FRACTION))
     early_idx = np.arange(split_point)
     late_idx = np.arange(split_point, n)
-
-    # Random split with the same proportions for fair comparison.
     rng = np.random.default_rng(42)
     perm = rng.permutation(n)
-    random_train_idx = perm[:split_point]
-    random_test_idx = perm[split_point:]
+    return split_point, early_idx, late_idx, perm[:split_point], perm[split_point:]
 
-    # Target prep
-    y_full: np.ndarray | None = None
-    target_valid: np.ndarray | None = None
-    if target is not None and target_kind is not None:
-        t_col_idx = len(features)
-        y_raw = raw[:, t_col_idx]
-        target_valid = _valid_mask(y_raw)
-        if target_kind == "classification":
-            y_full = np.full(n, -1, dtype=int)
-            y_full[target_valid] = (
-                LabelEncoder().fit_transform(y_raw[target_valid].astype(str)).astype(int)
-            )
-        else:
-            y_full = np.full(n, np.nan, dtype=np.float64)
-            y_full[target_valid] = np.asarray(y_raw[target_valid], dtype=np.float64)
 
-    # Per-feature analysis
+def _prepare_temporal_target(
+    raw: np.ndarray,
+    *,
+    n_features: int,
+    target: str | None,
+    target_kind: str | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if target is None or target_kind is None:
+        return None, None
+    n = len(raw)
+    y_raw = raw[:, n_features]
+    target_valid = _valid_mask(y_raw)
+    if target_kind == "classification":
+        y_full = np.full(n, -1, dtype=int)
+        y_full[target_valid] = (
+            LabelEncoder().fit_transform(y_raw[target_valid].astype(str)).astype(int)
+        )
+    else:
+        y_full = np.full(n, np.nan, dtype=np.float64)
+        y_full[target_valid] = np.asarray(y_raw[target_valid], dtype=np.float64)
+    return y_full, target_valid
+
+
+def _analyze_temporal_features(
+    *,
+    raw: np.ndarray,
+    stats: dict[str, ColumnStats],
+    features: list[str],
+    time_as_float: np.ndarray,
+    split_point: int,
+    early_idx: np.ndarray,
+    late_idx: np.ndarray,
+    random_train_idx: np.ndarray,
+    random_test_idx: np.ndarray,
+    y_full: np.ndarray | None,
+    target_valid: np.ndarray | None,
+    target_kind: str | None,
+) -> list[TemporalSignal | None]:
     def _run_feature(j: int, feat: str) -> TemporalSignal | None:
         feat_valid = _valid_mask(raw[:, j])
         return _analyze_feature(
@@ -266,19 +364,20 @@ def temporal_signals(
             n_nulls=stats[feat].n_null,
         )
 
-    # Parallelize the per-feature loop when it's wide enough to amortize
-    # joblib's process-fork cost. Each call fits up to two decision trees,
-    # which is CPU-bound and embarrassingly parallel.
-    results: list[TemporalSignal | None]
     if len(features) >= 16:
         from joblib import Parallel, delayed
 
-        results = Parallel(n_jobs=-1, prefer="processes")(
+        return Parallel(n_jobs=-1, prefer="processes")(
             delayed(_run_feature)(j, feat) for j, feat in enumerate(features)
         )
-    else:
-        results = [_run_feature(j, feat) for j, feat in enumerate(features)]
+    return [_run_feature(j, feat) for j, feat in enumerate(features)]
 
+
+def _collect_temporal_signals(
+    results: list[TemporalSignal | None],
+    *,
+    time_col: str,
+) -> list[TemporalSignal]:
     signals: list[TemporalSignal] = []
     monotonic_flags = 0
     for feat_signal in results:
@@ -287,9 +386,15 @@ def temporal_signals(
         if feat_signal.time_monotonicity and feat_signal.time_monotonicity >= MONOTONIC_THRESHOLD:
             monotonic_flags += 1
         signals.append(feat_signal)
+    _demote_ingest_order_monotonicity(signals, monotonic_flags, time_col)
+    return signals
 
-    # If most features are time-monotonic, the time column is probably ingest
-    # order, not event time — demote all monotonic flags to a single warning.
+
+def _demote_ingest_order_monotonicity(
+    signals: list[TemporalSignal],
+    monotonic_flags: int,
+    time_col: str,
+) -> None:
     if monotonic_flags > max(2, len(signals) // 2):
         for s in signals:
             if (
@@ -300,27 +405,20 @@ def temporal_signals(
                 s.severity = "info"
                 s.reason = f"Time-monotonic, but `{time_col}` looks like ingest order."
 
-    # Target drift
-    target_drift, target_drift_kind, target_drift_score = (
-        _target_drift(
-            y_full,
-            target_valid,
-            target_kind,
-            time_as_float,
-        )
-        if y_full is not None
-        else (None, None, None)
-    )
 
-    return TemporalReport(
-        time_column=time_col,
-        target=target,
-        signals=signals,
-        target_drift=target_drift,
-        target_drift_kind=target_drift_kind,
-        target_drift_score=target_drift_score,
-        time_buckets=_time_bucket_summary(src, stats, time_col, target),
-        insufficient=None,
+def _target_drift_or_empty(
+    y_full: np.ndarray | None,
+    target_valid: np.ndarray | None,
+    target_kind: str | None,
+    time_as_float: np.ndarray,
+) -> tuple[float | None, str | None, float | None]:
+    if y_full is None:
+        return None, None, None
+    return _target_drift(
+        y_full,
+        target_valid,
+        target_kind,
+        time_as_float,
     )
 
 
