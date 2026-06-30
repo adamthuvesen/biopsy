@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from biopsy.profile import profile
@@ -45,6 +46,24 @@ def test_compare_detects_numeric_shift(tmp_path: Path) -> None:
     # The age finding should be among the top-3 drift findings.
     top_finding_cols = [f.columns[0] for f in report.findings if f.columns][:3]
     assert "age" in top_finding_cols
+
+
+def test_compare_report_saves_json(tmp_path: Path) -> None:
+    from conftest import write_two_csvs_with_shift
+
+    from biopsy import compare_profiles
+
+    a_path, b_path = write_two_csvs_with_shift(tmp_path)
+    report = compare_profiles(profile(a_path, target="target"), profile(b_path, target="target"))
+
+    saved = report.save(tmp_path / "compare.json")
+    payload = json.loads(saved.read_text())
+
+    assert payload["a_name"] == "a.csv"
+    assert payload["b_name"] == "b.csv"
+    assert payload["schema"]["shared"]
+    assert payload["drifts"]
+    assert payload["findings"]
 
 
 def test_categorical_drift_skips_one_sided_low_top_coverage() -> None:

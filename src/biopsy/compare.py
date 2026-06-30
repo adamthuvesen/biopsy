@@ -19,8 +19,11 @@ for a given metric (e.g., a categorical column has no histogram).
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 from scipy.spatial.distance import jensenshannon
@@ -28,6 +31,7 @@ from scipy.stats import chi2_contingency, kstwo, wasserstein_distance
 
 from biopsy.findings import Finding
 from biopsy.profile import Profile
+from biopsy.serialize import to_jsonable
 from biopsy.stats import _NUMERIC_TYPES, ColumnStats
 
 # --- thresholds ------------------------------------------------------------
@@ -100,6 +104,18 @@ class CompareReport:
 
     def top(self, limit: int = 10) -> list[FeatureDrift]:
         return self.drifts[:limit]
+
+    def to_dict(self) -> dict[str, Any]:
+        return to_jsonable(self)
+
+    def to_json(self, indent: int | None = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+
+    def save(self, path: str | Path) -> Path:
+        out = Path(path).expanduser().resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(self.to_json(), encoding="utf-8")
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +415,22 @@ def _drift_findings(
     drifts: list[FeatureDrift],
     target: TargetDelta | None,
 ) -> list[Finding]:
-    out: list[Finding] = []
+    out = _schema_findings(schema)
+    for drift in drifts:
+        finding = _feature_drift_finding(drift)
+        if finding is not None:
+            out.append(finding)
+    target_finding = _target_drift_finding(target)
+    if target_finding is not None:
+        out.append(target_finding)
+    out.sort(key=lambda f: (f.rank, -f.score))
+    return out
+
+
+def _schema_findings(schema: SchemaDiff) -> list[Finding]:
+    findings: list[Finding] = []
     if schema.added:
-        out.append(
+        findings.append(
             Finding(
                 severity="info",
                 category="drift",
@@ -412,7 +441,7 @@ def _drift_findings(
             )
         )
     if schema.removed:
-        out.append(
+        findings.append(
             Finding(
                 severity="warning",
                 category="drift",
@@ -423,7 +452,7 @@ def _drift_findings(
             )
         )
     for col, ka, kb in schema.type_changed:
-        out.append(
+        findings.append(
             Finding(
                 severity="warning",
                 category="drift",
@@ -433,79 +462,91 @@ def _drift_findings(
                 score=0.75,
             )
         )
+    return findings
 
-    for d in drifts:
-        sev = _drift_severity(d)
-        if sev == "none":
-            continue
-        bits: list[str] = []
-        if d.ks_stat is not None:
-            valid_p = d.ks_pvalue is not None and not math.isnan(d.ks_pvalue)
-            p_disp = f"{d.ks_pvalue:.2g}" if valid_p else "—"
-            bits.append(f"KS={d.ks_stat:.2f} (p={p_disp})")
-        if d.psi is not None and d.psi >= PSI_WARNING:
-            bits.append(f"PSI={d.psi:.2f}")
-        if d.js_divergence is not None and d.js_divergence >= JS_WARNING:
-            bits.append(f"JS={d.js_divergence:.2f}")
-        if d.chi2_pvalue is not None and d.chi2_pvalue < 0.05:
-            bits.append(f"χ² p={d.chi2_pvalue:.2g}")
-        if d.null_rate_delta is not None and abs(d.null_rate_delta) >= NULL_DELTA_WARNING:
-            bits.append(f"null Δ {d.null_rate_delta:+.0%}")
-        if not bits:
-            continue
-        out.append(
-            Finding(
-                severity=sev,
-                category="drift",
-                title=f"`{d.column}` drifts A → B",
-                detail="; ".join(bits),
-                columns=[d.column],
-                score=d.drift_score,
-            )
-        )
 
-    if target is not None and target.delta is not None:
-        sev = "info"
-        if target.kind == "binary_rate" and target.a_value:
-            rel = abs(target.delta) / max(target.a_value, 1e-6)
-            if rel >= 0.5:
-                sev = "critical"
-            elif rel >= 0.2:
-                sev = "warning"
-        elif target.kind == "multiclass_rate" and target.delta >= 0.05:
-            sev = "warning" if target.delta < 0.15 else "critical"
-        elif target.kind == "regression_mean":
-            sev = "info"
-        out.append(
-            Finding(
-                severity=sev,
-                category="drift",
-                title="target distribution shifts",
-                detail=target.detail,
-                columns=[],
-                score=0.85 if sev == "critical" else 0.65,
-            )
-        )
+def _feature_drift_finding(drift: FeatureDrift) -> Finding | None:
+    severity = _drift_severity(drift)
+    if severity == "none":
+        return None
+    bits = _drift_detail_bits(drift)
+    if not bits:
+        return None
+    return Finding(
+        severity=severity,
+        category="drift",
+        title=f"`{drift.column}` drifts A → B",
+        detail="; ".join(bits),
+        columns=[drift.column],
+        score=drift.drift_score,
+    )
 
-    out.sort(key=lambda f: (f.rank, -f.score))
-    return out
+
+def _drift_detail_bits(drift: FeatureDrift) -> list[str]:
+    bits: list[str] = []
+    if drift.ks_stat is not None:
+        valid_p = drift.ks_pvalue is not None and not math.isnan(drift.ks_pvalue)
+        p_disp = f"{drift.ks_pvalue:.2g}" if valid_p else "—"
+        bits.append(f"KS={drift.ks_stat:.2f} (p={p_disp})")
+    if drift.psi is not None and drift.psi >= PSI_WARNING:
+        bits.append(f"PSI={drift.psi:.2f}")
+    if drift.js_divergence is not None and drift.js_divergence >= JS_WARNING:
+        bits.append(f"JS={drift.js_divergence:.2f}")
+    if drift.chi2_pvalue is not None and drift.chi2_pvalue < 0.05:
+        bits.append(f"χ² p={drift.chi2_pvalue:.2g}")
+    if drift.null_rate_delta is not None and abs(drift.null_rate_delta) >= NULL_DELTA_WARNING:
+        bits.append(f"null Δ {drift.null_rate_delta:+.0%}")
+    return bits
+
+
+def _target_drift_finding(target: TargetDelta | None) -> Finding | None:
+    if target is None or target.delta is None:
+        return None
+    severity = _target_drift_severity(target)
+    return Finding(
+        severity=severity,
+        category="drift",
+        title="target distribution shifts",
+        detail=target.detail,
+        columns=[],
+        score=0.85 if severity == "critical" else 0.65,
+    )
+
+
+def _target_drift_severity(target: TargetDelta) -> str:
+    if target.kind == "binary_rate" and target.a_value:
+        rel = abs(target.delta or 0.0) / max(target.a_value, 1e-6)
+        if rel >= 0.5:
+            return "critical"
+        if rel >= 0.2:
+            return "warning"
+    if target.kind == "multiclass_rate" and target.delta is not None and target.delta >= 0.05:
+        return "warning" if target.delta < 0.15 else "critical"
+    return "info"
 
 
 def _drift_severity(d: FeatureDrift) -> str:
-    if d.ks_stat is not None and d.ks_stat >= KS_CRITICAL:
+    critical_metrics = (
+        (d.ks_stat, KS_CRITICAL),
+        (d.psi, PSI_CRITICAL),
+        (d.js_divergence, JS_CRITICAL),
+    )
+    if _any_metric_at_least(critical_metrics):
         return "critical"
-    if d.psi is not None and d.psi >= PSI_CRITICAL:
-        return "critical"
-    if d.js_divergence is not None and d.js_divergence >= JS_CRITICAL:
-        return "critical"
-    if d.ks_stat is not None and d.ks_stat >= KS_WARNING:
+
+    warning_metrics = (
+        (d.ks_stat, KS_WARNING),
+        (d.psi, PSI_WARNING),
+        (d.js_divergence, JS_WARNING),
+        (abs(d.null_rate_delta) if d.null_rate_delta is not None else None, NULL_DELTA_WARNING),
+    )
+    if _any_metric_at_least(warning_metrics):
         return "warning"
-    if d.psi is not None and d.psi >= PSI_WARNING:
-        return "warning"
-    if d.js_divergence is not None and d.js_divergence >= JS_WARNING:
-        return "warning"
-    if d.null_rate_delta is not None and abs(d.null_rate_delta) >= NULL_DELTA_WARNING:
-        return "warning"
+
     if d.chi2_pvalue is not None and d.chi2_pvalue < 0.05:
         return "info"
     return "none"
+
+
+def _any_metric_at_least(metrics: tuple[tuple[float | None, float], ...]) -> bool:
+    return any(value is not None and value >= threshold for value, threshold in metrics)
