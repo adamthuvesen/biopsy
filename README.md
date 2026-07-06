@@ -82,14 +82,14 @@ prof.to_sklearn_pipeline_code()
 
 ## Why not ydata-profiling?
 
-Different job. `ydata-profiling`, SweetViz, and DataPrep *describe* every column —
+Different job. `ydata-profiling`, SweetViz, and DataPrep *describe* every column:
 dozens of sections of histograms, quantiles, and correlations. `biopsy` *ranks*
 the handful of things that will break your model. Leakage is the clearest case.
 
 `biopsy demo --rows 5000` plants one **temporal leak**: `cohort_engagement_v2` is
 backfilled from the outcome, but only for the most recent ~30% of users, so it
 looks like a healthy feature. ydata-profiling shows it as 1 of 15 cards with a
-generic **High correlation** badge — one of 14 unranked alerts, the same badge it
+generic **High correlation** badge, one of 14 unranked alerts, the same badge it
 gives benign pairs. It never splits on time, so it can't tell a leak from signal.
 
 `biopsy` ranks the same column **CRITICAL**, at the top of the report:
@@ -105,17 +105,17 @@ gives benign pairs. It never splits on time, so it can't tell a leak from signal
 
 The tell is the collapse: predictive power (PPS) 0.39 under random CV → **0.00**
 under a time-ordered split. It looks like a top feature in testing, then
-contributes nothing in production — something a description-only profiler can't see.
+contributes nothing in production, something a description-only profiler can't see.
 
 <details>
 <summary>Reproduce both numbers (the demo seed is pinned)</summary>
 
 ```bash
-# identical demo dataset — biopsy's seed is fixed at 42
+# identical demo dataset, biopsy's seed is fixed at 42
 python -c "from biopsy.demo import write_demo_csv; write_demo_csv('/tmp/demo.csv', n=5000)"
 biopsy profile /tmp/demo.csv --target churned
 
-# ydata-profiling — throwaway venv, never added to biopsy's deps
+# ydata-profiling: throwaway venv, never added to biopsy's deps
 uv venv /tmp/ydata && uv pip install --python /tmp/ydata/bin/python ydata-profiling pandas "setuptools<81"
 /tmp/ydata/bin/python -c "import pandas as pd; from ydata_profiling import ProfileReport; ProfileReport(pd.read_csv('/tmp/demo.csv')).to_file('/tmp/ydata.html')"
 ```

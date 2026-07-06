@@ -1,7 +1,7 @@
-# AGENTS.md — biopsy
+# AGENTS.md: biopsy
 
 `biopsy` is an opinionated EDA library + CLI. Point it at a CSV or Parquet and
-get a ranked report of what matters for modeling — distributions, nulls,
+get a ranked report of what matters for modeling: distributions, nulls,
 outliers, non-linear correlations, target signal, temporal leakage, redundancy
 clustering, drift comparison, and a runnable sklearn preprocessor + split/CV
 recommendation. Differentiator vs `ydata-profiling` / `SweetViz` / `DataPrep`:
@@ -56,12 +56,12 @@ biopsy doctor data.parquet          # quick schema + candidates
 - **DuckDB-first.** Column stats and Pearson correlations are computed in SQL.
   Use `_quote_ident(col)` (in [src/biopsy/io.py](src/biopsy/io.py)) and
   `_quote(col)` (in [src/biopsy/stats.py](src/biopsy/stats.py)) for identifiers;
-  `_lit(value, is_numeric)` for literals — never string-interpolate.
+  `_lit(value, is_numeric)` for literals. Never string-interpolate.
 - **Library split.** sklearn for MI / PPS / AUC / permutation importance /
   bootstrap CIs; scipy for `spearmanr`, `ks_2samp`, `chi2_contingency`;
   plotly + jinja2 for HTML; rich + typer for CLI.
 - **No blanket `except Exception:`** unless the failure is genuinely recoverable
-  and documented — silent failures hid a real bug in the v0.1 review.
+  and documented. Silent failures hid a real bug in the v0.1 review.
 - **Severity vocabulary:** `critical` / `warning` / `info`. Categories:
   `leakage`, `suspicious`, `quality`, `distribution`, `correlation`, `target`,
   `temporal`, `drift`.
