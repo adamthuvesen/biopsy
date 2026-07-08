@@ -1,5 +1,7 @@
 # biopsy
 
+![License](https://img.shields.io/github/license/adamthuvesen/biopsy) ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+
 `biopsy` is a Python library and CLI for finding modeling risks before they
 reach training. Point it at a CSV, Parquet file, dataframe, or warehouse table
 and it returns a short ranked report: temporal leaks, drift, null traps, IDs,
