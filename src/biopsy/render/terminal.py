@@ -22,6 +22,7 @@ SEVERITY_STYLE = {
 SEVERITY_ICON = {"critical": "■", "warning": "▲", "info": "·"}
 
 _BOX = box.SIMPLE_HEAD
+_MAX_COLUMNS = 30  # cap for the ranked column table when not showing all columns
 
 
 def render(
@@ -29,7 +30,6 @@ def render(
     console: Console | None = None,
     *,
     all_columns: bool = True,
-    max_columns: int = 30,
 ) -> None:
     if console is None:
         console = Console(width=min(Console().width, _MAX_WIDTH))
@@ -93,7 +93,7 @@ def render(
         console.print(_shortlist_table(prof))
 
     console.print(Rule("[bold]Columns[/bold]", style="bright_black"))
-    console.print(_columns_table(prof, all_columns=all_columns, max_columns=max_columns))
+    console.print(_columns_table(prof, all_columns=all_columns))
 
     if prof.correlations:
         console.print(Rule("[bold]Top correlations[/bold]", style="bright_black"))
@@ -277,7 +277,7 @@ def _shortlist_table(prof: Profile) -> Table:
 # ── Columns ───────────────────────────────────────────────────────────────────
 
 
-def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Table:
+def _columns_table(prof: Profile, *, all_columns: bool) -> Table:
     t = Table(box=_BOX, show_header=True, header_style="bold", expand=True, padding=(0, 1))
     t.add_column("column", style="cyan", no_wrap=True)
     t.add_column("type", style="dim")
@@ -286,7 +286,7 @@ def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Tab
     t.add_column("distribution / top", overflow="fold", min_width=16)
     t.add_column("summary", overflow="fold")
 
-    columns = list(prof.columns.values()) if all_columns else _selected_columns(prof, max_columns)
+    columns = list(prof.columns.values()) if all_columns else _selected_columns(prof)
     for s in columns:
         null_str = _pct(s.null_rate)
         if s.null_rate > 0.5:
@@ -311,7 +311,8 @@ def _columns_table(prof: Profile, *, all_columns: bool, max_columns: int) -> Tab
     return t
 
 
-def _selected_columns(prof: Profile, max_columns: int) -> list[ColumnStats]:
+def _selected_columns(prof: Profile) -> list[ColumnStats]:
+    max_columns = _MAX_COLUMNS
     names: list[str] = []
     for f in prof.findings[:20]:
         names.extend(c for c in f.columns if c in prof.columns)

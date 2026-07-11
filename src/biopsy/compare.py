@@ -67,7 +67,6 @@ class FeatureDrift:
     null_rate_delta: float | None = None
     mean_a: float | None = None
     mean_b: float | None = None
-    mean_delta: float | None = None
 
     @property
     def drift_score(self) -> float:
@@ -179,8 +178,6 @@ def _numeric_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDrift:
     drift.null_rate_delta = sb.null_rate - sa.null_rate
     drift.mean_a = sa.mean
     drift.mean_b = sb.mean
-    if sa.mean is not None and sb.mean is not None:
-        drift.mean_delta = sb.mean - sa.mean
 
     rebinned = _rebin_to_union(sa, sb)
     if rebinned is None:

@@ -23,7 +23,6 @@ from plotly.offline import get_plotlyjs
 from biopsy.correlations import CorrelationPair, TargetSignal
 from biopsy.findings import Finding, severity_counts
 from biopsy.profile import Profile
-from biopsy.render.charts import column_chart_html
 from biopsy.stats import _NUMERIC_TYPES, ColumnStats
 from biopsy.temporal import TemporalReport, TemporalSignal
 
@@ -90,6 +89,7 @@ COLORWAY = ["#7C2D12", "#1E3A8A", "#3F6212", "#A16207", "#6B21A8", "#0E7490"]
 
 _TEMPLATE_NAME = "biopsy"
 PLOTLY_JS_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
+_HEATMAP_MAX_FEATURES = 60  # cap features shown in correlation heatmaps
 
 
 def _ensure_template() -> None:
@@ -554,6 +554,17 @@ def _quality_score(prof: Profile) -> tuple[int, str]:
 # --- template binding ------------------------------------------------------
 
 
+def column_chart_html(stats: ColumnStats) -> str:
+    """Plotly div HTML for one column's distribution chart."""
+    if stats.kind == "numeric":
+        return _histogram_fig(stats)
+    if stats.kind in {"text", "bool"}:
+        return _bar_fig(stats)
+    if stats.kind == "temporal":
+        return _temporal_column_fig(stats)
+    return ""
+
+
 def _columns_payload(prof: Profile) -> list[dict[str, Any]]:
     columns = []
     for s in prof.columns.values():
@@ -669,23 +680,19 @@ def _quality_context(prof: Profile) -> dict[str, Any]:
     }
 
 
-def _build_report_context(
-    prof: Profile,
-    *,
-    heatmap_limit: int = 60,
-) -> dict[str, Any]:
+def _build_report_context(prof: Profile) -> dict[str, Any]:
     """Assemble Jinja context for the main profile report."""
     pearson_heatmap = _heatmap_fig(
         prof.correlations,
         prof.columns,
         "pearson",
-        max_features=heatmap_limit,
+        max_features=_HEATMAP_MAX_FEATURES,
     )
     mi_heatmap = _heatmap_fig(
         prof.correlations,
         prof.columns,
         "mutual_info",
-        max_features=heatmap_limit,
+        max_features=_HEATMAP_MAX_FEATURES,
     )
 
     return {
@@ -727,13 +734,12 @@ def render_string(
     prof: Profile,
     *,
     embed_plotly: bool = True,
-    heatmap_limit: int = 60,
 ) -> str:
     _ensure_template()
     env = _template_env()
     env.filters["pct"] = _profile_pct_filter
 
-    ctx = _build_report_context(prof, heatmap_limit=heatmap_limit)
+    ctx = _build_report_context(prof)
     ctx.update(_plotly_context(embed_plotly=embed_plotly, include_dark_palette=True))
 
     tpl = env.get_template("report.html.j2")
@@ -746,10 +752,9 @@ def render(
     output_path: str | Path,
     *,
     embed_plotly: bool = True,
-    heatmap_limit: int = 60,
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
-    html = render_string(prof, embed_plotly=embed_plotly, heatmap_limit=heatmap_limit)
+    html = render_string(prof, embed_plotly=embed_plotly)
     return _write_html(output_path, html)
 
 
