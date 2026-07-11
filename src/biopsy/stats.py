@@ -82,6 +82,7 @@ def compute_column(
         base = src.con.execute(
             f"SELECT COUNT(*), COUNT({col}), COUNT(DISTINCT {col}) FROM data"
         ).fetchone()
+        assert base is not None
         n, n_nonnull, n_unique = base
     n_null = n - n_nonnull
 
@@ -126,6 +127,7 @@ def compute_column(
                     THEN 1 ELSE 0 END)
             FROM data
         """).fetchone()
+        assert row is not None
         (
             stats.mean,
             stats.std,
@@ -175,6 +177,7 @@ def compute_column(
                 f"SELECT AVG(LENGTH({col}))::DOUBLE, MAX(LENGTH({col})) "
                 f"FROM data WHERE {col} IS NOT NULL"
             ).fetchone()
+            assert lens is not None
             stats.avg_len, stats.max_len = lens
 
     elif kind == "temporal" and n_nonnull > 0:
@@ -183,6 +186,7 @@ def compute_column(
                    epoch(MAX({col}))::BIGINT - epoch(MIN({col}))::BIGINT
             FROM data WHERE {col} IS NOT NULL
         """).fetchone()
+        assert row is not None
         stats.top_values = [("min", row[0]), ("max", row[1])]
         span_seconds = row[2] or 0
         # Choose bucket: month if span < 5 years, year otherwise; day if < 60 days.
@@ -226,11 +230,14 @@ def _numeric_histogram(
         row = src.con.execute(
             f"SELECT MIN({col})::DOUBLE, MAX({col})::DOUBLE FROM data WHERE {where}"
         ).fetchone()
+        assert row is not None
         lo, hi = row
     if lo is None or hi is None:
         return []
     if lo == hi:
-        c = src.con.execute(f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]).fetchone()[0]
+        count_row = src.con.execute(f"SELECT COUNT(*) FROM data WHERE {col} = ?", [lo]).fetchone()
+        assert count_row is not None
+        c = count_row[0]
         return [(lo, hi, c)]
 
     width = (hi - lo) / bins
@@ -279,6 +286,7 @@ def _batched_base_counts(src: Source) -> dict[str, tuple[int, int, int]]:
         selects.append(f"COUNT({q})")
         selects.append(f"COUNT(DISTINCT {q})")
     row = src.con.execute(f"SELECT {', '.join(selects)} FROM data").fetchone()
+    assert row is not None
     n = int(row[0])
     out: dict[str, tuple[int, int, int]] = {}
     for i, col in enumerate(src.columns):

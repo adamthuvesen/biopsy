@@ -28,6 +28,7 @@ snowflake = ["snowflake-connector-python>=3.7", "pyarrow>=15"]
 bigquery = ["google-cloud-bigquery>=3.20", "pyarrow>=15"]
 warehouse = ["biopsy[snowflake,bigquery,postgres,object-store]"]
 dev = [
+    "mypy>=2.2.0",
     "pandas>=2.0",
     "polars>=0.20",
     "pyarrow>=15",
@@ -54,3 +55,12 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/biopsy/cli/*.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/biopsy"]
+check_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_unused_ignores = true
+show_error_codes = true

@@ -286,7 +286,7 @@ def _categorical_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDri
     if (sa.n_unique / a_nonnull) > 0.5 or (sb.n_unique / b_nonnull) > 0.5:
         return drift
 
-    keys = set()
+    keys: set[str] = set()
     a_counts = dict(_normalize_top(sa.top_values))
     b_counts = dict(_normalize_top(sb.top_values))
     # Top-K must cover a meaningful share of the data for the K-bin JS
@@ -301,8 +301,8 @@ def _categorical_drift(col: str, sa: ColumnStats, sb: ColumnStats) -> FeatureDri
     keys.update(b_counts)
     if not keys:
         return drift
-    a_vec = np.array([a_counts.get(k, 0) for k in keys], dtype=float)
-    b_vec = np.array([b_counts.get(k, 0) for k in keys], dtype=float)
+    a_vec = np.array([float(a_counts.get(k, 0)) for k in keys], dtype=float)
+    b_vec = np.array([float(b_counts.get(k, 0)) for k in keys], dtype=float)
     if a_vec.sum() == 0 or b_vec.sum() == 0:
         return drift
     contingency = np.vstack([a_vec, b_vec])

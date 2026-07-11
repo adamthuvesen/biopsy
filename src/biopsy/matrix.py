@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from biopsy.io import Source
@@ -9,7 +11,7 @@ from biopsy.stats import _quote
 
 
 def _fetch_object_array(
-    con: object,
+    con: Any,
     sql: str,
     columns: list[str],
 ) -> np.ndarray:

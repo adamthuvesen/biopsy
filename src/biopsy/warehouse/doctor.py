@@ -23,29 +23,31 @@ def discover_warehouse_schema(
     scheme = parsed.scheme
 
     if scheme in _OBJECT_STORE_SCHEMES:
-        from biopsy.warehouse.object_store import discover_schema
+        from biopsy.warehouse.object_store import discover_schema as discover_object_store_schema
 
         con = duckdb.connect(":memory:")
         try:
-            schema, row_estimate = discover_schema(con, parsed), None
+            schema, row_estimate = discover_object_store_schema(con, parsed), None
         finally:
             con.close()
     elif scheme in {"postgres", "postgresql"}:
-        from biopsy.warehouse.postgres import discover_schema
+        from biopsy.warehouse.postgres import discover_schema as discover_postgres_schema
 
         con = duckdb.connect(":memory:")
         try:
-            schema, row_estimate = discover_schema(con, parsed, credentials_env=credentials_env)
+            schema, row_estimate = discover_postgres_schema(
+                con, parsed, credentials_env=credentials_env
+            )
         finally:
             con.close()
     elif scheme == "bigquery":
-        from biopsy.warehouse.bigquery import discover_schema
+        from biopsy.warehouse.bigquery import discover_schema as discover_bigquery_schema
 
-        schema, row_estimate = discover_schema(parsed, credentials_env=credentials_env)
+        schema, row_estimate = discover_bigquery_schema(parsed, credentials_env=credentials_env)
     elif scheme == "snowflake":
-        from biopsy.warehouse.snowflake import discover_schema
+        from biopsy.warehouse.snowflake import discover_schema as discover_snowflake_schema
 
-        schema, row_estimate = discover_schema(parsed, credentials_env=credentials_env)
+        schema, row_estimate = discover_snowflake_schema(parsed, credentials_env=credentials_env)
     else:
         return None
 

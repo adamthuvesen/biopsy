@@ -88,6 +88,7 @@ def pearson_matrix(
     if not select_parts:
         return pairs
     row = src.con.execute(f"SELECT {', '.join(select_parts)} FROM data").fetchone()
+    assert row is not None
     for key, val in zip(keys, row, strict=True):
         if val is not None and not (isinstance(val, float) and np.isnan(val)):
             pairs[key] = float(val)

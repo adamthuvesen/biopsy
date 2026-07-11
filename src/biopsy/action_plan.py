@@ -14,7 +14,7 @@ HTML, terminal, and sklearn-pipeline codegen all read from the same
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from biopsy.findings import Finding
@@ -181,6 +181,7 @@ def _action_from_finding(
 
     title = finding.title.replace("`", "")
     reason = title
+    severity = cast(Severity, finding.severity)
 
     is_drop_kind = finding.kind in _DROP_KINDS or (
         not finding.kind and any(marker in finding.title for marker in _DROP_TITLE_MARKERS)
@@ -193,7 +194,7 @@ def _action_from_finding(
                 column=column,
                 action="drop",
                 reason=reason,
-                severity=finding.severity,
+                severity=severity,
                 evidence=[title],
             ),
         )
@@ -206,7 +207,7 @@ def _action_from_finding(
                 column=column,
                 action="review",
                 reason=reason,
-                severity=finding.severity,
+                severity=severity,
                 evidence=[title],
             ),
         )
@@ -220,7 +221,7 @@ def _action_from_finding(
                 column=column,
                 action=action,
                 reason=reason,
-                severity=finding.severity,
+                severity=severity,
                 evidence=[title],
             ),
         )
@@ -236,7 +237,7 @@ def _action_from_finding(
                 column=column,
                 action="replace_sentinel_with_null",
                 reason=reason,
-                severity=finding.severity,
+                severity=severity,
                 evidence=[title],
             ),
         )
@@ -244,13 +245,7 @@ def _action_from_finding(
 
 
 def _transform_action(stats: ColumnStats | None) -> str:
-    is_skewed = (
-        stats is not None
-        and stats.kind == "numeric"
-        and stats.skew is not None
-        and abs(stats.skew) > 3
-    )
-    if not is_skewed:
+    if stats is None or stats.kind != "numeric" or stats.skew is None or abs(stats.skew) <= 3:
         return "robust_scaler"
     positive_only = stats.min is not None and stats.min >= 0
     return "log1p" if positive_only else "yeo_johnson"
