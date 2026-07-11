@@ -46,6 +46,19 @@ class CorrelationPair:
         return self.mutual_info - abs(self.pearson) > 0.15
 
 
+def _cap_by_priority(
+    cols: list[str], max_cols: int | None, priority_features: list[str] | None
+) -> list[str]:
+    """Trim `cols` to `max_cols`, keeping `priority_features` first."""
+    if max_cols is None or len(cols) <= max_cols:
+        return cols
+    if priority_features:
+        priority = [c for c in priority_features if c in cols]
+        rest = [c for c in cols if c not in priority]
+        return (priority + rest)[:max_cols]
+    return cols[:max_cols]
+
+
 def pearson_matrix(
     src: Source,
     stats: dict[str, ColumnStats],
@@ -61,13 +74,7 @@ def pearson_matrix(
     uncapped pass builds ~125k aggregates per row scan.
     """
     numeric = [n for n, s in stats.items() if s.kind == "numeric" and not s.is_constant]
-    if max_cols is not None and len(numeric) > max_cols:
-        if priority_features:
-            priority = [c for c in priority_features if c in numeric]
-            rest = [c for c in numeric if c not in priority]
-            numeric = (priority + rest)[:max_cols]
-        else:
-            numeric = numeric[:max_cols]
+    numeric = _cap_by_priority(numeric, max_cols, priority_features)
     pairs: dict[tuple[str, str], float] = {}
     if len(numeric) < 2:
         return pairs
@@ -143,13 +150,7 @@ def mutual_info_matrix(
         if not s.is_constant
         and (s.kind == "numeric" or (s.kind in {"text", "bool"} and s.n_unique <= 50))
     ]
-    if max_cols is not None and len(eligible) > max_cols:
-        if priority_features:
-            priority = [c for c in priority_features if c in eligible]
-            rest = [c for c in eligible if c not in priority]
-            eligible = (priority + rest)[:max_cols]
-        else:
-            eligible = eligible[:max_cols]
+    eligible = _cap_by_priority(eligible, max_cols, priority_features)
     if len(eligible) < 2:
         return {}
 

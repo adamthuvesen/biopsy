@@ -26,7 +26,7 @@ src/biopsy/
 ├── profile/         # orchestrator + public API (Profile dataclasses, serde)
 ├── cli/             # Typer CLI, one module per command
 ├── warehouse/       # remote sources: postgres, bigquery, snowflake
-├── render/          # terminal (Rich), charts + html (Plotly/Jinja)
+├── render/          # terminal (Rich), HTML with Plotly charts (Jinja)
 └── templates/       # report.html.j2, compare.html.j2
 tests/               # domain-split suites + test_warehouse*.py
 ```

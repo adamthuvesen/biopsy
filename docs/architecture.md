@@ -55,8 +55,8 @@ Remote sources: postgres, bigquery, snowflake (plus `object_store` and
 ## `src/biopsy/render/`
 
 - `terminal.py`: Rich terminal report (100-char cap layout).
-- `charts.py`: Plotly chart builders.
-- `html.py`: Plotly + Jinja HTML report and compare report.
+- `html.py`: Plotly + Jinja HTML report and compare report (owns the
+  per-column chart builders).
 
 ## `src/biopsy/templates/`
 

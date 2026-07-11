@@ -25,7 +25,6 @@ from biopsy.matrix import SampleCache, _fetch_object_array
 from biopsy.stats import ColumnStats, _quote
 
 DEFAULT_CUTOFF = 0.30  # 1 - |ρ|, so any pair with |ρ| ≥ 0.70 collapses
-MIN_CLUSTER_MEMBERS_FOR_DEDUP = 2
 WEAK_REP_PPS_THRESHOLD = 0.05  # if target available
 WEAK_REP_AUC_THRESHOLD = 0.10  # normalized AUC; raw ~0.55
 WEAK_REP_MI_THRESHOLD = 0.05
@@ -69,10 +68,6 @@ class ClusterReport:
     n_features: int = 0
     n_singletons: int = 0
 
-    @property
-    def largest_cluster_size(self) -> int:
-        return max((c.size for c in self.clusters), default=0)
-
 
 # --- algorithm -------------------------------------------------------------
 
@@ -80,7 +75,6 @@ class ClusterReport:
 def _spearman_distance_matrix(
     src: Source,
     feature_names: list[str],
-    max_rows: int = 20_000,
     sample_cache: SampleCache | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Return (distance matrix, ordered feature names). Distance = 1 − |ρ|."""
@@ -91,13 +85,13 @@ def _spearman_distance_matrix(
         quoted = ", ".join(_quote(c) for c in feature_names)
         raw = _fetch_object_array(
             src.con,
-            f"SELECT {quoted} FROM data USING SAMPLE {max_rows} ROWS (reservoir, 42)",
+            f"SELECT {quoted} FROM data USING SAMPLE 20000 ROWS (reservoir, 42)",
             feature_names,
         )
         if raw.size == 0:
             return np.empty((0, 0)), feature_names
     else:
-        _cols, raw = sample_cache.fetch(feature_names, max_rows=max_rows)
+        _cols, raw = sample_cache.fetch(feature_names, max_rows=20_000)
     if raw.size == 0:
         return np.empty((0, 0)), feature_names
     n = len(feature_names)
@@ -264,7 +258,6 @@ def cluster_features(
     target: str | None = None,
     target_signals: list[TargetSignal] | None = None,
     cutoff: float = DEFAULT_CUTOFF,
-    max_rows: int = 20_000,
     max_shortlist: int | None = None,
     sample_cache: SampleCache | None = None,
 ) -> ClusterReport:
@@ -280,9 +273,7 @@ def cluster_features(
     if len(eligible) < 2:
         return ClusterReport(clusters=[], shortlist=[], cutoff=cutoff, n_features=len(eligible))
 
-    distance, kept = _spearman_distance_matrix(
-        src, eligible, max_rows=max_rows, sample_cache=sample_cache
-    )
+    distance, kept = _spearman_distance_matrix(src, eligible, sample_cache=sample_cache)
     if distance.size == 0:
         return ClusterReport(clusters=[], shortlist=[], cutoff=cutoff, n_features=len(eligible))
 

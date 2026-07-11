@@ -356,10 +356,6 @@ def _encode_action(stats: ColumnStats) -> ActionItem | None:
     )
 
 
-def _bucket_label(bucket: Any) -> str:
-    return str(bucket.label)
-
-
 def _add(bucket: dict[str, ActionItem], col: str, item: ActionItem) -> None:
     """Merge with the existing item if any; keep the strongest severity."""
     existing = bucket.get(col)
@@ -395,8 +391,8 @@ def _recommend_split_and_cv(prof: Profile) -> tuple[SplitRecommendation, CVRecom
         cut_train = max(1, int(n * 0.70))
         cut_val = max(cut_train + 1, int(n * 0.85))
         cut_val = min(cut_val, n - 1)
-        train_end = _bucket_label(buckets[cut_train - 1])
-        val_end = _bucket_label(buckets[cut_val - 1])
+        train_end = str(buckets[cut_train - 1].label)
+        val_end = str(buckets[cut_val - 1].label)
         split = SplitRecommendation(
             kind="temporal",
             detail=(

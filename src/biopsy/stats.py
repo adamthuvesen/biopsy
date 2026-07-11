@@ -27,16 +27,11 @@ class ColumnStats:
     mean: float | None = None
     std: float | None = None
     min: float | None = None
-    p01: float | None = None
     p25: float | None = None
     p50: float | None = None
     p75: float | None = None
-    p99: float | None = None
     max: float | None = None
     skew: float | None = None
-    kurtosis: float | None = None
-    n_zero: int | None = None
-    n_negative: int | None = None
     n_outliers_iqr: int | None = None
 
     # categorical/text
@@ -101,35 +96,30 @@ def compute_column(
     )
 
     if kind == "numeric" and n_nonnull > 0:
-        # One scan: aggregates + quantiles + IQR-outlier count + sign counts.
-        # The CTE binds the quantile vector once so the outlier predicate can
-        # reference it without recomputing.
+        # One scan: aggregates + quantiles + IQR-outlier count. The CTE binds
+        # the quantile vector once so the outlier predicate can reference it
+        # without recomputing.
         row = src.con.execute(f"""
             WITH q AS (
-                SELECT quantile_cont({col}, [0.01, 0.25, 0.5, 0.75, 0.99]) AS qs
+                SELECT quantile_cont({col}, [0.25, 0.5, 0.75]) AS qs
                 FROM data
             ),
             bounds AS (
                 SELECT
-                    qs[2] AS q25, qs[4] AS q75,
-                    qs[2] - 1.5 * (qs[4] - qs[2]) AS lo,
-                    qs[4] + 1.5 * (qs[4] - qs[2]) AS hi
+                    qs[1] AS q25, qs[3] AS q75,
+                    qs[1] - 1.5 * (qs[3] - qs[1]) AS lo,
+                    qs[3] + 1.5 * (qs[3] - qs[1]) AS hi
                 FROM q
             )
             SELECT
                 AVG({col})::DOUBLE,
                 STDDEV_SAMP({col})::DOUBLE,
                 MIN({col})::DOUBLE,
-                (SELECT qs[1] FROM q)::DOUBLE,
                 (SELECT q25 FROM bounds)::DOUBLE,
-                (SELECT qs[3] FROM q)::DOUBLE,
+                (SELECT qs[2] FROM q)::DOUBLE,
                 (SELECT q75 FROM bounds)::DOUBLE,
-                (SELECT qs[5] FROM q)::DOUBLE,
                 MAX({col})::DOUBLE,
                 skewness({col})::DOUBLE,
-                kurtosis({col})::DOUBLE,
-                SUM(CASE WHEN {col} = 0 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN {col} < 0 THEN 1 ELSE 0 END),
                 SUM(CASE
                     WHEN (SELECT q75 - q25 FROM bounds) > 0
                      AND ({col} < (SELECT lo FROM bounds) OR {col} > (SELECT hi FROM bounds))
@@ -140,16 +130,11 @@ def compute_column(
             stats.mean,
             stats.std,
             stats.min,
-            stats.p01,
             stats.p25,
             stats.p50,
             stats.p75,
-            stats.p99,
             stats.max,
             stats.skew,
-            stats.kurtosis,
-            stats.n_zero,
-            stats.n_negative,
             stats.n_outliers_iqr,
         ) = row
         top = src.con.execute(f"""
@@ -161,10 +146,9 @@ def compute_column(
             LIMIT 1
         """).fetchall()
         stats.top_values = [(v, c) for v, c in top]
-        # skew/kurtosis are undefined for constant or near-constant columns
+        # skew is undefined for constant or near-constant columns
         if stats.std is None or stats.std == 0:
             stats.skew = None
-            stats.kurtosis = None
 
         stats.histogram = _numeric_histogram(
             src,
