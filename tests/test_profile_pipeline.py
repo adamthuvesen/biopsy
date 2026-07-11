@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 
 from biopsy.demo import synthetic_dataframe, write_demo_csv
-from biopsy.profile import load_profile, profile
+from biopsy.profile import Profile, load_profile, profile
+from biopsy.profile.serde import PROFILE_SCHEMA_VERSION
 from biopsy.stats import ColumnStats
 
 
@@ -144,6 +145,9 @@ def test_profile_save_load_and_repr_html(tmp_path: Path) -> None:
     saved = prof.save(tmp_path / "profile.json")
     loaded = load_profile(saved)
 
+    assert json.loads(saved.read_text(encoding="utf-8"))["schema_version"] == (
+        PROFILE_SCHEMA_VERSION
+    )
     assert loaded.source_name == prof.source_name
     assert loaded.source_path == prof.source_path
     assert loaded.target == "churned"
@@ -154,6 +158,25 @@ def test_profile_save_load_and_repr_html(tmp_path: Path) -> None:
     assert "<!doctype html>" in html
     assert "biopsy" in html
     assert "churned" in html
+
+
+def test_profile_from_dict_accepts_unversioned_payload(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=200)
+    payload = profile(csv, deep_correlations=False).to_dict()
+    payload.pop("schema_version")
+
+    loaded = Profile.from_dict(payload)
+
+    assert loaded.source_name == "demo.csv"
+
+
+def test_profile_from_dict_rejects_unknown_schema_version(tmp_path: Path) -> None:
+    csv = write_demo_csv(tmp_path / "demo.csv", n=200)
+    payload = profile(csv, deep_correlations=False).to_dict()
+    payload["schema_version"] = PROFILE_SCHEMA_VERSION + 1
+
+    with pytest.raises(ValueError, match=r"schema version 2 is not supported"):
+        Profile.from_dict(payload)
 
 
 def test_profile_pandas_frame_helpers(tmp_path: Path) -> None:

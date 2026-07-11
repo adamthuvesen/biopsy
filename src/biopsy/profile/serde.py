@@ -14,6 +14,21 @@ from biopsy.stats import ColumnStats
 from biopsy.targets import TargetSummary
 from biopsy.temporal import TemporalReport, TimeBucket, temporal_signal_from_payload
 
+PROFILE_SCHEMA_VERSION = 1
+_SUPPORTED_PROFILE_SCHEMA_VERSIONS = {0, PROFILE_SCHEMA_VERSION}
+
+
+def _validate_profile_schema_version(data: dict[str, Any]) -> None:
+    """Reject profile formats this biopsy version cannot read."""
+    version = data.get("schema_version", 0)
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ValueError("Profile schema_version must be an integer.")
+    if version not in _SUPPORTED_PROFILE_SCHEMA_VERSIONS:
+        supported = ", ".join(str(value) for value in sorted(_SUPPORTED_PROFILE_SCHEMA_VERSIONS))
+        raise ValueError(
+            f"Profile schema version {version} is not supported; supported versions: {supported}."
+        )
+
 
 def load_profile(path: str | Path) -> Profile:
     from biopsy.profile.model import Profile
