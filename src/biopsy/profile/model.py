@@ -86,7 +86,11 @@ class Profile:
         return diff_profiles(self, other)
 
     def to_dict(self) -> dict[str, Any]:
-        return to_jsonable(self)
+        from biopsy.profile.serde import PROFILE_SCHEMA_VERSION
+
+        payload = to_jsonable(self)
+        payload["schema_version"] = PROFILE_SCHEMA_VERSION
+        return payload
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
@@ -104,8 +108,10 @@ class Profile:
             _from_cluster_report,
             _from_target_summary,
             _from_temporal_report,
+            _validate_profile_schema_version,
         )
 
+        _validate_profile_schema_version(data)
         return cls(
             source_name=str(data["source_name"]),
             source_path=(
