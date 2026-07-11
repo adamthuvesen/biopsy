@@ -155,6 +155,8 @@ def profile_cmd(
     ignore_missing_exclude = bool_option(
         "ignore_missing_exclude", ignore_missing_exclude, default=False
     )
+    assert bins is not None
+    assert target_sample is not None
 
     cfg_exclude = string_list(cfg.get("exclude"))
     file_exclude = read_exclude_file(exclude_file or path_or_none(cfg.get("exclude_file")))

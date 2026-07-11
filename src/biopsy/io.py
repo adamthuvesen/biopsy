@@ -139,7 +139,9 @@ def load(
         excluded = set(exclude or [])
         columns = [c for c in raw_columns if c not in excluded]
         dtypes = {c: raw_dtypes[c] for c in columns}
-        n_rows = con.execute("SELECT COUNT(*) FROM data").fetchone()[0]
+        count_row = con.execute("SELECT COUNT(*) FROM data").fetchone()
+        assert count_row is not None
+        n_rows = count_row[0]
 
         return Source(
             con=con,

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from biopsy.warehouse._base import (
     AdapterResult,
@@ -139,7 +139,7 @@ def discover_schema(
 # --- internals -------------------------------------------------------------
 
 
-def _connect(credentials_env: str | None) -> object:
+def _connect(credentials_env: str | None) -> Any:
     """Lazy-import google-cloud-bigquery and build a client.
 
     Credentials come from `GOOGLE_APPLICATION_CREDENTIALS` (a path to a
@@ -194,7 +194,7 @@ def _split_table(parsed: ParsedURI) -> tuple[str, str, str]:
 
 
 def _fetch_schema(
-    client: object,
+    client: Any,
     project: str,
     dataset: str,
     table: str,
@@ -257,7 +257,7 @@ def _swap_quotes_to_backticks(clause: str) -> str:
     return clause.replace('"', "`")
 
 
-def _maybe_warn_cost(client: object, sql: str) -> None:
+def _maybe_warn_cost(client: Any, sql: str) -> None:
     """Run a dry-run query and print a stderr warning above the threshold."""
     try:
         from google.cloud.bigquery import QueryJobConfig

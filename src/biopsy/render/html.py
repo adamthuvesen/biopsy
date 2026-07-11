@@ -12,7 +12,7 @@ from __future__ import annotations
 import html as html_lib
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -325,11 +325,11 @@ def _temporal_fig(report: TemporalReport) -> str:
     ]
     if not sigs:
         return ""
-    sigs.sort(key=lambda s: -(s.random_pps - s.time_pps))
+    sigs.sort(key=lambda s: -(cast(float, s.random_pps) - cast(float, s.time_pps)))
     sigs = sigs[:25]
     labels = [s.feature for s in sigs][::-1]
-    random_vals = [s.random_pps for s in sigs][::-1]
-    time_vals = [s.time_pps for s in sigs][::-1]
+    random_vals = [cast(float, s.random_pps) for s in sigs][::-1]
+    time_vals = [cast(float, s.time_pps) for s in sigs][::-1]
     leak = [s.severity == "critical" for s in sigs][::-1]
 
     fig = go.Figure()
@@ -423,7 +423,7 @@ def _heatmap_fig(
 
     idx = {n: i for i, n in enumerate(numeric)}
     n = len(numeric)
-    m = [[None] * n for _ in range(n)]
+    m: list[list[float | None]] = [[None] * n for _ in range(n)]
     for i in range(n):
         m[i][i] = 1.0
     for p in corrs:
@@ -853,8 +853,8 @@ def _compare_feature_cards(
     prof_b: Profile,
     report: object,
 ) -> list[dict[str, Any]]:
-    feature_cards = []
-    top = getattr(report, "top", lambda n=12: [])(12)
+    feature_cards: list[dict[str, Any]] = []
+    top: list[Any] = getattr(report, "top", lambda n=12: [])(12)
     for d in top:
         if d.drift_score <= 0:
             continue

@@ -368,6 +368,7 @@ uv pip install -e ".[warehouse]"
 ```bash
 uv run pytest tests/ -q
 uv run ruff check src tests
+uv run mypy
 uv run biopsy demo --rows 1000
 ```
 

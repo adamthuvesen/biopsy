@@ -42,6 +42,7 @@ uv pip install -e ".[dev]"          # dev environment
 uv run python -m pytest tests/ -q   # test suite
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format gate
+uv run mypy                          # type check
 
 biopsy demo --rows 5000             # synthetic dataset
 biopsy profile data.parquet --target y

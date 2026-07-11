@@ -246,6 +246,7 @@ def _univariate_priority(
         qtarget = _quote(target)
         select = ", ".join(f"abs(corr({_quote(n)}, {qtarget}))" for n in numeric_eligible)
         row = src.con.execute(f"SELECT {select} FROM data").fetchone()
+        assert row is not None
         for name, value in zip(numeric_eligible, row, strict=True):
             if value is not None:
                 abs_corr[name] = float(value)
