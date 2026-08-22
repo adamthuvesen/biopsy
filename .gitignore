@@ -8,5 +8,4 @@ build/
 *.egg-info/
 .claude/
 .DS_Store
-openspec/
 assets/demo.gif
